@@ -48,11 +48,6 @@ private:
                 SDL_PumpEvents();
                 while(SDL_PollEvent(&e)){
                     switch (e.type){
-                    case SDL_CONTROLLERDEVICEADDED:
-                        if(!controller){
-                            controller = SDL_GameControllerOpen(e.cdevice.which);
-                        }
-                        break;
 
                     case SDL_CONTROLLERBUTTONDOWN:
                         emit buttonPressed(e.cbutton.button);
@@ -62,7 +57,14 @@ private:
                         break;
                     }
                 }
-                SDL_Delay(1);
+                for (int b=0; b < SDL_CONTROLLER_BUTTON_MAX; b++)
+                {
+                    if(SDL_GameControllerGetButton(controller, (SDL_GameControllerButton)b))
+                    {
+                        emit buttonPressed(b);
+                    }
+                }
+                SDL_Delay(5);
             }
         });
         thread->start();

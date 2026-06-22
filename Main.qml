@@ -3,6 +3,8 @@ import QtQuick.Controls
 import SDL 1.0
 import QtQuick.Layouts
 import QtQuick.Shapes
+import QtQuick.Window
+import QtQml
 Window {
 
     id: window
@@ -341,6 +343,9 @@ Window {
         duration: 1000
         easing.type: Easing.OutQuad
     }
+
+
+
 
 }
 
