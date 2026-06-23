@@ -1,7 +1,7 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <SDL2/SDL.h>
-
+#include "TcpClient.h"
 #include "sdlhelper.h"
 int main(int argc, char *argv[])
 {
@@ -10,7 +10,7 @@ int main(int argc, char *argv[])
 
     QGuiApplication app(argc, argv);
     qmlRegisterType<SdlHelper>("SDL", 1, 0, "SdlHelper");
-
+    qmlRegisterType<TcpClient>("Networking", 1, 0, "TcpClient");
     QQmlApplicationEngine engine;
     QObject::connect(
         &engine,

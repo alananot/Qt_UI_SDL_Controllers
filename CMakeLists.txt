@@ -21,6 +21,8 @@ qt_add_qml_module(apptest4
         SOURCES sdlhelper.h
         QML_FILES
         RESOURCES Saab.jpg
+        SOURCES TcpClient.h
+        SOURCES TcpClient.cpp
 )
 
 # Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.

@@ -368,6 +368,7 @@ Window {
                 onAxisMoved: {
                     if (status !== "Intro") {
                         status = "Operative"
+                        
                         switch (axis) {
                         case 0: x1_movement = Math.abs(value) > 5000 ? Math.sign(value) * Math.pow(Math.abs(value), 0.2) : 0; break
                         case 1: y1_movement = Math.abs(value) > 5000 ? Math.sign(value) * Math.pow(Math.abs(value), 0.2) : 0; break
