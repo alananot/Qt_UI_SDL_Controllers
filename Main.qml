@@ -41,14 +41,7 @@ Window {
     property int speed: 0
     property double socketValue: 0
     property bool isidle: false
-    property var buttons: {
-        "a" = 0
-        "b" = 0
-        "x" = 0
-        "y" = 0
-        "shoulder_l"= 0
-        "shoulder_r" = 0
-    }
+
 
     /* ==================== GRAPH COMPONENT ==================== */
     TcpClient{
