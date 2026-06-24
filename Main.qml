@@ -15,6 +15,18 @@ Window {
     title: "Saab System UI"
     color: "#0B0E14"
 
+    MouseArea{
+        anchors.fill: parent
+        enabled: false
+    }
+
+    property int a: 0
+    property int b: 0
+    property int y: 0
+    property int x: 0
+    property int shoulder_r: 0
+    property int shoulder_l: 0
+
     property int leftX: 0
     property int leftY: 0
     property int rightX: 0
@@ -23,12 +35,59 @@ Window {
     property real y1_movement: 0.0
     property real x2_movement: 0.0
     property real y2_movement: 0.0
+    property int right_trig: 0
+    property int  left_trig: 0
     property string status: "Intro"
     property int speed: 0
+    property double socketValue: 0
+    property bool isidle: false
+    property var buttons: {
+        "a" = 0
+        "b" = 0
+        "x" = 0
+        "y" = 0
+        "shoulder_l"= 0
+        "shoulder_r" = 0
+    }
 
     /* ==================== GRAPH COMPONENT ==================== */
+    TcpClient{
+        id: tcpGraph
+        onConnected : {
+            console.log("Connected to server")
+        }
+
+        onMessageRecieved:{
+
+            socketValue = parseInt(msg)
+
+        }
+
+
+    }
+    TcpClient{
+    id: tcpButtons
+    onConnected:{
+        console.log("Buttons connected")
+    }
+    }
+    TcpClient{
+    id: tcpJoystick
+    onConnected:{
+        console.log("Joysticks connected")
+    }
+    }
+
+    Timer{
+        interval: 50
+        running: true
+        repeat: true
+        onTriggered: tcpGraph.sendMessage("READ\n")
+    }
+
     component Graph: Item {
         id: graphRoot
+
 
         property color lineColor: "#AFC7FF"
         property color gridColor: "#1A2333"
@@ -45,6 +104,48 @@ Window {
             border.width: 2
             radius: 4
         }
+        Canvas {
+            anchors.fill: parent
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.strokeStyle = "#4A5A7A"
+                ctx.lineWidth = 2
+
+                // Y‑axel (vänster)
+                ctx.beginPath()
+                ctx.moveTo(40, 0)
+                ctx.lineTo(40, height)
+                ctx.stroke()
+
+                // X‑axel (botten)
+                ctx.beginPath()
+                ctx.moveTo(0, height - 30)
+                ctx.lineTo(width, height - 30)
+                ctx.stroke()
+            }
+        }
+        Text {
+            text: "0"
+            color: "white"
+            x: 5
+            y: graphRoot.height - 45
+        }
+
+        Text {
+            text: "Max"
+            color: "white"
+            x: 5
+            y: 10
+        }
+
+        Text {
+            text: "Time →"
+            color: "white"
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: graphRoot.height - 25
+        }
+
+
 
         // Grid
         Canvas {
@@ -72,7 +173,7 @@ Window {
             repeat: true
             onTriggered: {
                 var p = graphRoot.points.slice()
-                var newY = height/2 + Math.sin(p.length * 0.18) * (height * 0.38 * graphRoot.amplitude) + (Math.random()-0.5)*20
+                var newY = height/2 + (window.socketValue * (height * 0.4) - height * 0.2)
 
                 // Begränsa Y-värdet så det inte går utanför
                 newY = Math.max(10, Math.min(height - 10, newY))
@@ -110,7 +211,9 @@ Window {
                 PathPolyline { path: graphRoot.points }
             }
         }
+
     }
+
 
     /* ---------------- INTRO ---------------- */
     Rectangle {
@@ -167,6 +270,8 @@ Window {
                 NumberAnimation { from: 1.0; to: 0.2; duration: 900 }
             }
         }
+
+
         TcpClient{
         id: client
         onConnected:
@@ -176,15 +281,19 @@ Window {
             fadeOutAnimation.start()
             fadeOutAnimation2.start()
             fadeOutHUD.start()
-            fadeInAnimation.start()
+            //fadeInAnimation.start()
             fadeInAnimation2.start()
-            status = "Operative"
-            status_light.color = "Green"
-            button = 0
+            status = "operative"
+            status_light.color = "green"
+            client.sendMessage(status)
+
+
 
         }
         onErrorOccurred: {
+            status = "error"
             intro_text.text = "Error: " + err
+            status_light.color = "red"
         }
 
         }
@@ -196,15 +305,18 @@ Window {
 
 
             onButtonPressed: {
-                if(locked)
-                    return
+                if (locked) return
 
                 locked = true
                 intro_text.text = "Trying to Connect"
-                client.connectToHost("192.168.1.146", 2222)
-                                lockTimer.start()
 
+                client.connectToHost("192.168.1.146", 2222)      // HUD
+                tcpGraph.connectToHost("192.168.1.146", 2223)    // GPIO
+                tcpButtons.connectToHost("192.168.1.146", 2224)  // Knappar
+                tcpJoystick.connectToHost("192.168.1.146", 2225) //Joystick
+                lockTimer.start()
             }
+
         }
 
         Component.onCompleted: intro.initGamepad()
@@ -340,51 +452,90 @@ Window {
         Rectangle { id: mouse; width: 20; height: 20; radius: 2; x: 300; y: 200; color: "#D6E1FF"; border.color: "#3A4A66"; border.width: 1 }
         Rectangle { id: mouse2; width: 20; height: 20; radius: 2; x: 800; y: 200; color: "#FF5555"; border.color: "#3A4A66"; border.width: 1 }
 
-        Rectangle {
-            id: connection
-            opacity: 0
-            width: 22; height: 22; radius: 2; color: "#1A2333"
-            border.color: "#3A4A66"; border.width: 2
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.bottom: parent.bottom
-            anchors.bottomMargin: 20
 
-            Rectangle {
-                id: status_light
-                width: 14; height: 14; radius: 2
-                anchors.centerIn: parent
-                color: "white"
+    }
+    Rectangle {
+        id: connection
+        z : 12
+        opacity: 1
+        width: 22; height: 22; radius: 2; color: "#1A2333"
+        border.color: "#3A4A66"; border.width: 2
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 20
+
+        Rectangle {
+            id: status_light
+            width: 14; height: 14; radius: 2
+            anchors.centerIn: parent
+            color: "yellow"
+        }
+
+
+        SdlHelper {
+            id: sdl
+            onButtonPressed: {
+                reset_idle()
+                console.log("Button pressed!!!")
+                if (status !== "Intro") {
+
+                    // SKICKA KNAPPTRYCKNING TILL SERVERN
+                    switch(button){
+                    case 0: a = true ? 1: 0; break
+                    case 1: b = true ? 1: 0; break
+                    case 2: x = true ? 1: 0; break
+                    case 3: y = true ? 1: 0; break
+                    case 9: shoulder_l = true ? 1: 0; break
+                    case 10: shoulder_r = true ? 1: 0; break
+                    }
+                    console.log(button)
+
+                    //tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
+                    //console.log(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
+
+                }
             }
 
-            SdlHelper {
-                id: sdl
-                onButtonPressed: {
-                    if (status !== "Intro") {
+            onAxisMoved: {
 
-                        if (button === 16) status_light.color = "yellow"
-                        if (button === 18) status_light.color = "white"
+                if (status !== "Intro") {
+                    status = "Operative"
+
+
+                    switch (axis) {
+                    case 0: x1_movement = Math.abs(value) > 2000 ? value : 0; break
+                    case 1: y1_movement = Math.abs(value) > 2000 ? value : 0; break
+                    case 2: x2_movement = Math.abs(value) > 2000 ? value : 0; break
+                    case 3: y2_movement = Math.abs(value) > 2000 ? value : 0; break
+                    case 4: console.log(value); break
+                    case 5: console.log(value); break
+
                     }
-                }
-                onAxisMoved: {
-                    if (status !== "Intro") {
-                        status = "Operative"
-                        switch (axis) {
-                        case 0: x1_movement = Math.abs(value) > 5000 ? Math.sign(value) * Math.pow(Math.abs(value), 0.2) : 0; break
-                        case 1: y1_movement = Math.abs(value) > 5000 ? Math.sign(value) * Math.pow(Math.abs(value), 0.2) : 0; break
-                        case 2: x2_movement = Math.abs(value) > 5000 ? Math.sign(value) * Math.pow(Math.abs(value), 0.2) : 0; break
-                        case 3: y2_movement = Math.abs(value) > 5000 ? Math.sign(value) * Math.pow(Math.abs(value), 0.2) : 0; break
-                        }
-                        mouse.x += x1_movement
-                        mouse.y += y1_movement
-                        mouse2.x += x2_movement
-                        mouse2.y += y2_movement
+
+                    if(Math.abs(value) > 2000)
+                    {
+                        reset_idle()
                     }
+
+                    /*switch (axis) {
+                    case 0: x1_movement = Math.abs(value) > 5000 ? Math.sign(value) * Math.pow(Math.abs(value), 0.2) : 0; break
+                    case 1: y1_movement = Math.abs(value) > 5000 ? Math.sign(value) * Math.pow(Math.abs(value), 0.2) : 0; break
+                    case 2: x2_movement = Math.abs(value) > 5000 ? Math.sign(value) * Math.pow(Math.abs(value), 0.2) : 0; break
+                    case 3: y2_movement = Math.abs(value) > 5000 ? Math.sign(value) * Math.pow(Math.abs(value), 0.2) : 0; break
+                    }*/
+
+                    mouse.x += x1_movement
+                    mouse.y += y1_movement
+                    mouse2.x += x2_movement
+                    mouse2.y += y2_movement
+                    tcpJoystick.sendMessage(x1_movement+"," +y1_movement + "," + x2_movement+ "," +  y2_movement+ "," + right_trig + "," + left_trig)
                 }
             }
         }
 
-        Component.onCompleted: sdl.initGamepad()
     }
+
+    Component.onCompleted: sdl.initGamepad()
 
     /* Quit button */
     Button {
@@ -422,11 +573,48 @@ Window {
     onTriggered: intro.locked = false
 
     }
+    Timer{
+    id: is_idle_time
+    interval: 6000
+    repeat: false
+    onTriggered:{
+        if(status != "Intro" && status != "error")
+        {
+        window.isidle = true
+        console.log("System is now idle")
+        status_light.color = "white"
+        }
+    }
+    }
+    function reset_idle(){
+        console.log("Nuvarande status: "+status)
+        if(window.isidle){
+            console.log("Exiting idle state")
+        }
+        window.isidle = false
+        if(status != "intro" && status != "error"){
+        status_light.color = "green"
+
+        }
+        else if(status == "error"){
+            status_light.color = "red"
+        }
+
+        else{
+            status_light.color = "yellow"
+        }
+        client.sendMessage(status)
+        is_idle_time.restart()
+    }
+
+
 
     /* Animations */
     PropertyAnimation { id: fadeOutAnimation; target: fadeoutintro; property: "opacity"; to: 0.0; duration: 1000 }
     PropertyAnimation { id: fadeOutAnimation2; target: saabLogo; property: "opacity"; to: 0.0; duration: 1000 }
     PropertyAnimation { id: fadeOutHUD; target: hudIntro; property: "opacity"; to: 0.0; duration: 1200 }
-    PropertyAnimation { id: fadeInAnimation; target: connection; property: "opacity"; to: 1.0; duration: 1000 }
+    //PropertyAnimation { id: fadeInAnimation; target: connection; property: "opacity"; to: 1.0; duration: 1000 }
     PropertyAnimation { id: fadeInAnimation2; target: program; property: "opacity"; to: 1.0; duration: 1000 }
+
+
 }
