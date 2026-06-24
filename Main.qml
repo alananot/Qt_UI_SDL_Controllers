@@ -41,7 +41,14 @@ Window {
     property int speed: 0
     property double socketValue: 0
     property bool isidle: false
-
+    property var buttons: {
+        "a" : 0,
+        "b" : 0,
+        "x" : 0,
+        "y" : 0,
+        "shoulder_l": 0,
+        "shoulder_r": 0
+    }
 
     /* ==================== GRAPH COMPONENT ==================== */
     TcpClient{
@@ -298,6 +305,7 @@ Window {
 
 
             onButtonPressed: {
+                if(status == "Intro"){
                 if (locked) return
 
                 locked = true
@@ -308,7 +316,7 @@ Window {
                 tcpButtons.connectToHost("192.168.1.146", 2224)  // Knappar
                 tcpJoystick.connectToHost("192.168.1.146", 2225) //Joystick
                 lockTimer.start()
-            }
+            }}
 
         }
 
@@ -470,24 +478,47 @@ Window {
             onButtonPressed: {
                 reset_idle()
                 console.log("Button pressed!!!")
+
                 if (status !== "Intro") {
 
                     // SKICKA KNAPPTRYCKNING TILL SERVERN
                     switch(button){
-                    case 0: a = true ? 1: 0; break
-                    case 1: b = true ? 1: 0; break
-                    case 2: x = true ? 1: 0; break
-                    case 3: y = true ? 1: 0; break
-                    case 9: shoulder_l = true ? 1: 0; break
-                    case 10: shoulder_r = true ? 1: 0; break
+                    case 0: a = 1; break
+                    case 1: b = 1; break
+                    case 2: x = 1; break
+                    case 3: y = 1; break
+                    case 9: shoulder_l = 1; break
+                    case 10: shoulder_r =1; break
                     }
                     console.log(button)
 
-                    //tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
-                    //console.log(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
+                    tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
+                    console.log(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
 
                 }
             }
+            onButtonReleased: {
+
+                console.log("Button released!!!")
+                if (status !== "Intro") {
+
+                    // SKICKA KNAPPTRYCKNING TILL SERVERN
+                    switch(button){
+                    case 0: a = 0; break
+                    case 1: b = 0; break
+                    case 2: x = 0; break
+                    case 3: y = 0; break
+                    case 9: shoulder_l = 0; break
+                    case 10: shoulder_r =0; break
+                    }
+                    console.log(button)
+
+                    tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
+                    console.log(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
+
+                }
+            }
+
 
             onAxisMoved: {
 
