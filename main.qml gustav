@@ -1,0 +1,350 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Shapes
+import QtQuick.Window
+import QtQml
+
+Window {
+    id: window
+    width: 1280
+    height: 800
+    visible: true
+    visibility: Window.FullScreen
+    title: "Saab System UI"
+    color: "#0B0E14"
+
+    property bool lockedOn: false
+    property int targetX: 0
+    property int targetY: 0
+    property int speed: 0
+    property double socketValue: 0
+
+    Timer {
+        interval: 100
+        running: true
+        repeat: true
+        onTriggered: {
+            var xhr = new XMLHttpRequest()
+            xhr.open("GET", "http://192.168.1.200:8080/status")
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                    var data = JSON.parse(xhr.responseText)
+                    window.lockedOn = data.locked
+                    window.targetX = data.cx
+                    window.targetY = data.cy
+                }
+            }
+            xhr.send()
+        }
+    }
+
+    component Graph: Item {
+        id: graphRoot
+        property color lineColor: "#AFC7FF"
+        property color gridColor: "#1A2333"
+        property real lineWidth: 2.5
+        property int updateInterval: 40
+
+        Rectangle {
+            anchors.fill: parent
+            color: "#0B0E14"
+            border.color: "#3A4A66"
+            border.width: 2
+            radius: 4
+        }
+        Canvas {
+            anchors.fill: parent
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.strokeStyle = "#4A5A7A"
+                ctx.lineWidth = 2
+                ctx.beginPath(); ctx.moveTo(40, 0); ctx.lineTo(40, height); ctx.stroke()
+                ctx.beginPath(); ctx.moveTo(0, height - 30); ctx.lineTo(width, height - 30); ctx.stroke()
+            }
+        }
+        Text { text: "0"; color: "white"; x: 5; y: graphRoot.height - 45 }
+        Text { text: "Max"; color: "white"; x: 5; y: 10 }
+        Text { text: "Time →"; color: "white"; anchors.horizontalCenter: parent.horizontalCenter; y: graphRoot.height - 25 }
+
+        Canvas {
+            anchors.fill: parent
+            opacity: 0.3
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.strokeStyle = graphRoot.gridColor
+                ctx.lineWidth = 1
+                for (var x = 0; x < width; x += 30) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke() }
+                for (var y = 0; y < height; y += 30) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
+            }
+        }
+
+        property var points: [Qt.point(0, height/2)]
+
+        Timer {
+            interval: graphRoot.updateInterval
+            running: true
+            repeat: true
+            onTriggered: {
+                var p = graphRoot.points.slice()
+                var newY = height/2 + (window.socketValue * (height * 0.4) - height * 0.2)
+                newY = Math.max(10, Math.min(height - 10, newY))
+                p.push(Qt.point(p.length * 3, newY))
+                while (p.length > 0 && p[p.length-1].x > width + 10) {
+                    for (var i = 0; i < p.length; i++) p[i].x -= 3
+                }
+                if (p.length > (width / 3) + 5) p.shift()
+                graphRoot.points = p
+            }
+        }
+
+        Shape {
+            anchors.fill: parent
+            antialiasing: true
+            clip: true
+            ShapePath {
+                strokeColor: graphRoot.lineColor
+                strokeWidth: graphRoot.lineWidth
+                fillColor: "transparent"
+                startX: 0
+                startY: graphRoot.height / 2
+                PathPolyline { path: graphRoot.points }
+            }
+        }
+    }
+
+    Rectangle { anchors.fill: parent; color: "#0B0E14" }
+
+    Canvas {
+        anchors.fill: parent
+        opacity: 0.18
+        onPaint: {
+            var ctx = getContext("2d")
+            ctx.strokeStyle = "#1A2333"
+            ctx.lineWidth = 1
+            for (var x = 0; x < width; x += 80) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke() }
+            for (var y = 0; y < height; y += 80) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
+        }
+    }
+
+    Flow {
+        id: box
+        anchors.fill: parent
+        anchors.leftMargin: 40
+        anchors.topMargin: 40
+        spacing: 20
+        flow: Flow.TopToBottom
+
+        ListModel {
+            id: order
+            ListElement { label: "States" }
+            ListElement { label: "Debug" }
+            ListElement { label: "Turretview" }
+            ListElement { label: "Vehicle overview" }
+            ListElement { label: "Speed" }
+        }
+
+        property var bigsize: [600, 700]
+        property var smallsize: [300, 350]
+
+        Repeater {
+            model: order
+            Button {
+                id: btn
+                text: model.label
+                font.pixelSize: 20
+                font.bold: true
+                font.family: "Eurostile"
+                width: index === 2 ? box.bigsize[0] : box.smallsize[0]
+                height: index === 2 ? box.bigsize[1] : box.smallsize[1]
+
+                background: Rectangle {
+                    radius: 4
+                    color: "#1A2333"
+                    border.color: window.lockedOn && btn.text === "Turretview" ? "#FF5555" : "#3A4A66"
+                    border.width: window.lockedOn && btn.text === "Turretview" ? 3 : 2
+                }
+
+                contentItem: Text {
+                    text: btn.text
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.top: parent.top
+                    anchors.topMargin: 10
+                    color: "#D6E1FF"
+                    font: btn.font
+                }
+
+                // Debug panel
+                Item {
+                    anchors.fill: parent
+                    visible: btn.text === "Debug"
+                    Graph {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                    }
+                }
+
+                // Turretview panel
+                Item {
+                    id: turretItem
+                    anchors.fill: parent
+                    visible: btn.text === "Turretview"
+                    property bool showFirst: true
+
+                    Image {
+                        id: feed1
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        fillMode: Image.PreserveAspectFit
+                        cache: false
+                        visible: turretItem.showFirst
+                        onStatusChanged: {
+                            if (status === Image.Ready) turretItem.showFirst = true
+                        }
+                    }
+
+                    Image {
+                        id: feed2
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        fillMode: Image.PreserveAspectFit
+                        cache: false
+                        visible: !turretItem.showFirst
+                        onStatusChanged: {
+                            if (status === Image.Ready) turretItem.showFirst = false
+                        }
+                    }
+
+                    Timer {
+                        interval: 150
+                        running: true
+                        repeat: true
+                        onTriggered: {
+                            var url = "http://192.168.1.200:8080/video_frame?t=" + Date.now()
+                            if (turretItem.showFirst) {
+                                feed2.source = url
+                            } else {
+                                feed1.source = url
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        visible: window.lockedOn
+                        anchors.top: parent.top
+                        anchors.right: parent.right
+                        anchors.margins: 15
+                        width: 130; height: 35
+                        color: "#8A1F1F"
+                        border.color: "#FF5555"
+                        border.width: 2
+                        radius: 4
+                        Text {
+                            anchors.centerIn: parent
+                            text: "LOCKED ON"
+                            color: "#FF5555"
+                            font.pixelSize: 16
+                            font.bold: true
+                            font.family: "Eurostile"
+                            SequentialAnimation on opacity {
+                                loops: Animation.Infinite
+                                NumberAnimation { from: 0.3; to: 1.0; duration: 400 }
+                                NumberAnimation { from: 1.0; to: 0.3; duration: 400 }
+                            }
+                        }
+                    }
+
+                    Canvas {
+                        anchors.fill: parent
+                        visible: window.targetX > 0
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.clearRect(0, 0, width, height)
+                            var sx = window.targetX / 640 * width
+                            var sy = window.targetY / 480 * height
+                            ctx.strokeStyle = window.lockedOn ? "#FF5555" : "#00FFFF"
+                            ctx.lineWidth = 2
+                            ctx.beginPath(); ctx.moveTo(sx - 20, sy); ctx.lineTo(sx + 20, sy); ctx.stroke()
+                            ctx.beginPath(); ctx.moveTo(sx, sy - 20); ctx.lineTo(sx, sy + 20); ctx.stroke()
+                            ctx.beginPath()
+                            ctx.arc(sx, sy, 15, 0, Math.PI * 2)
+                            ctx.stroke()
+                        }
+                        Connections {
+                            target: window
+                            function onTargetXChanged() { parent.requestPaint() }
+                            function onTargetYChanged() { parent.requestPaint() }
+                            function onLockedOnChanged() { parent.requestPaint() }
+                        }
+                    }
+                }
+
+                // States panel
+                Item {
+                    anchors.fill: parent
+                    visible: btn.text === "States"
+                    Column {
+                        anchors.centerIn: parent
+                        spacing: 12
+                        Text { text: "CONNECT STATE"; color: "#D6E1FF"; font.pixelSize: 18; font.bold: true }
+                        Text { text: "IDLE STATE"; color: "#D6E1FF"; font.pixelSize: 18; font.bold: true }
+                        Text { text: "OPERATIVE STATE"; color: "#D6E1FF"; font.pixelSize: 18; font.bold: true }
+                    }
+                }
+
+                // Speed panel
+                Item {
+                    anchors.fill: parent
+                    visible: btn.text === "Speed"
+                    Column {
+                        anchors.centerIn: parent
+                        spacing: 15
+                        Text { text: "SPEED"; font.pixelSize: 22; font.bold: true; color: "#D6E1FF" }
+                        Rectangle {
+                            width: parent.width * 0.8; height: 30; radius: 4
+                            color: "#0B0E14"; border.color: "#3A4A66"; border.width: 2
+                            Rectangle {
+                                height: parent.height
+                                width: Math.min(parent.width, window.speed * 2)
+                                color: "#D6E1FF"
+                            }
+                        }
+                        Text { text: "Speed: " + window.speed + " km/h"; font.pixelSize: 18; color: "#D6E1FF" }
+                    }
+                }
+
+                onClicked: {
+                    if (index !== 2) {
+                        let temp = order.get(2).label
+                        order.set(2, { label: model.label })
+                        order.set(index, { label: temp })
+                    }
+                }
+            }
+        }
+    }
+
+    Button {
+        z: 11
+        id: quit
+        text: "Quit"
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.margins: 20
+        font.pixelSize: 18
+        font.bold: true
+        font.family: "Eurostile"
+        background: Rectangle {
+            radius: 4
+            color: "#8A1F1F"
+            border.color: "#C44A4A"
+            border.width: 2
+        }
+        contentItem: Text {
+            text: quit.text
+            anchors.centerIn: parent
+            color: "white"
+            font: quit.font
+        }
+        onClicked: window.close()
+    }
+}
