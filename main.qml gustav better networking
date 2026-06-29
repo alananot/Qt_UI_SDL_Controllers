@@ -166,8 +166,8 @@ Window {
         Image {
             id: saabLogo
             source: "Saab(1).jpg"
-            width: 420
-            height: 420
+            width: 1920
+            height: 1920
             anchors.centerIn: parent
             opacity: 0.9
             fillMode: Image.PreserveAspectFit
@@ -307,74 +307,106 @@ Window {
         border.width: 2
         radius: 4
 
-        Column {
-            anchors.centerIn: parent
-            spacing: 16
+        // Panel title
+        Text {
+            id: statesTitle
+            text: "SYSTEM STATES"
+            color: "#AFC7FF"
+            font.pixelSize: 14
+            font.bold: true
+            font.family: "Eurostile"
+            anchors.top: parent.top
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.topMargin: 14
+            opacity: 0.6
+        }
 
-            // RGB Status Indicator LED (req 2211/2221/2231)
-            // - Connect state:   flashing Yellow
-            // - Operative state: solid Green
-            // - Idle state:      solid White
-            Rectangle {
-                id: status_light
-                width: 20; height: 20; radius: 10
-                color: "yellow"
-                anchors.horizontalCenter: parent.horizontalCenter
+        // RGB Status Indicator LED (req 2211/2221/2231)
+        // - Connect state:   flashing Yellow
+        // - Operative state: solid Green
+        // - Idle state:      solid White
+        Rectangle {
+            id: status_light
+            width: 22; height: 22; radius: 11
+            color: "yellow"
+            anchors.top: statesTitle.bottom
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.topMargin: 16
 
-                // Flashing Yellow animation - only active in Connect state (req 2211)
-                SequentialAnimation on opacity {
-                    id: connectBlink
-                    loops: Animation.Infinite
-                    running: status_light.color === "#ffff00" || status_light.color === "yellow"
-                    NumberAnimation { from: 0.4; to: 1.0; duration: 600 }
-                    NumberAnimation { from: 1.0; to: 0.4; duration: 600 }
-                }
+            // Flashing Yellow animation - only active in Connect state (req 2211)
+            SequentialAnimation on opacity {
+                id: connectBlink
+                loops: Animation.Infinite
+                running: status_light.color === "#ffff00" || status_light.color === "yellow"
+                NumberAnimation { from: 0.4; to: 1.0; duration: 600 }
+                NumberAnimation { from: 1.0; to: 0.4; duration: 600 }
             }
+        }
+
+        // State rows - centred in remaining space below LED
+        Column {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: status_light.bottom
+            anchors.bottom: parent.bottom
+            anchors.topMargin: 10
+            anchors.bottomMargin: 10
+            spacing: 0
+
+            // Spacer to push states to vertical center
+            Item { width: 1; height: (parent.height - 3 * 56) / 2 }
 
             // CONNECT STATE
             Rectangle {
-                width: 220; height: 36; radius: 4
-                color: "transparent"
-                border.color: status === "operative" ? "#00FF88" : "transparent"
-                border.width: 2
+                width: 240; height: 50; radius: 4
                 anchors.horizontalCenter: parent.horizontalCenter
+                color: status === "operative" ? "#0D2B1F" : "transparent"
+                border.color: status === "operative" ? "#00FF88" : "#2A3A55"
+                border.width: 2
                 Text {
                     text: "CONNECT STATE"
-                    color: status === "operative" ? "#00FF88" : "#D6E1FF"
-                    font.pixelSize: 18
+                    color: status === "operative" ? "#00FF88" : "#6A7A99"
+                    font.pixelSize: 17
                     font.bold: true
+                    font.family: "Eurostile"
                     anchors.centerIn: parent
                 }
             }
+
+            Item { width: 1; height: 6 }
 
             // IDLE STATE
             Rectangle {
-                width: 220; height: 36; radius: 4
-                color: "transparent"
-                border.color: window.isidle ? "#FFCC00" : "transparent"
-                border.width: 2
+                width: 240; height: 50; radius: 4
                 anchors.horizontalCenter: parent.horizontalCenter
+                color: window.isidle ? "#2B2200" : "transparent"
+                border.color: window.isidle ? "#FFCC00" : "#2A3A55"
+                border.width: 2
                 Text {
                     text: "IDLE STATE"
-                    color: window.isidle ? "#FFCC00" : "#D6E1FF"
-                    font.pixelSize: 18
+                    color: window.isidle ? "#FFCC00" : "#6A7A99"
+                    font.pixelSize: 17
                     font.bold: true
+                    font.family: "Eurostile"
                     anchors.centerIn: parent
                 }
             }
 
+            Item { width: 1; height: 6 }
+
             // OPERATIVE STATE
             Rectangle {
-                width: 220; height: 36; radius: 4
-                color: "transparent"
-                border.color: (status === "operative" || status === "Operative") && !window.isidle ? "#AFC7FF" : "transparent"
-                border.width: 2
+                width: 240; height: 50; radius: 4
                 anchors.horizontalCenter: parent.horizontalCenter
+                color: (status === "operative" || status === "Operative") && !window.isidle ? "#131B2E" : "transparent"
+                border.color: (status === "operative" || status === "Operative") && !window.isidle ? "#AFC7FF" : "#2A3A55"
+                border.width: 2
                 Text {
                     text: "OPERATIVE STATE"
-                    color: (status === "operative" || status === "Operative") && !window.isidle ? "#AFC7FF" : "#D6E1FF"
-                    font.pixelSize: 18
+                    color: (status === "operative" || status === "Operative") && !window.isidle ? "#AFC7FF" : "#6A7A99"
+                    font.pixelSize: 17
                     font.bold: true
+                    font.family: "Eurostile"
                     anchors.centerIn: parent
                 }
             }
