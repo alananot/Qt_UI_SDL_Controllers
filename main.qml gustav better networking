@@ -307,54 +307,34 @@ Window {
         border.width: 2
         radius: 4
 
-        // Panel title
-        Text {
-            id: statesTitle
-            text: "SYSTEM STATES"
-            color: "#AFC7FF"
-            font.pixelSize: 14
-            font.bold: true
-            font.family: "Eurostile"
-            anchors.top: parent.top
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.topMargin: 14
-            opacity: 0.6
-        }
-
-        // RGB Status Indicator LED (req 2211/2221/2231)
-        // - Connect state:   flashing Yellow
-        // - Operative state: solid Green
-        // - Idle state:      solid White
-        Rectangle {
-            id: status_light
-            width: 22; height: 22; radius: 11
-            color: "yellow"
-            anchors.top: statesTitle.bottom
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.topMargin: 16
-
-            // Flashing Yellow animation - only active in Connect state (req 2211)
-            SequentialAnimation on opacity {
-                id: connectBlink
-                loops: Animation.Infinite
-                running: status_light.color === "#ffff00" || status_light.color === "yellow"
-                NumberAnimation { from: 0.4; to: 1.0; duration: 600 }
-                NumberAnimation { from: 1.0; to: 0.4; duration: 600 }
-            }
-        }
-
-        // State rows - centred in remaining space below LED
+        // States + LED centrerade i panelen
         Column {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: status_light.bottom
-            anchors.bottom: parent.bottom
-            anchors.topMargin: 10
-            anchors.bottomMargin: 10
-            spacing: 0
+            anchors.centerIn: parent
+            spacing: 10
 
-            // Spacer to push states to vertical center
-            Item { width: 1; height: (parent.height - 3 * 56) / 2 }
+            // RGB Status Indicator LED (req 2211/2221/2231)
+            // - Connect state:   flashing Yellow
+            // - Operative state: solid Green
+            // - Idle state:      solid White
+            Rectangle {
+                id: status_light
+                width: 22; height: 22; radius: 11
+                color: "yellow"
+                anchors.horizontalCenter: parent.horizontalCenter
+
+                // Glow-effekt
+                layer.enabled: true
+                layer.effect: null
+
+                // Flashing Yellow animation - only active in Connect state (req 2211)
+                SequentialAnimation on opacity {
+                    id: connectBlink
+                    loops: Animation.Infinite
+                    running: status_light.color === "#ffff00" || status_light.color === "yellow"
+                    NumberAnimation { from: 0.4; to: 1.0; duration: 600 }
+                    NumberAnimation { from: 1.0; to: 0.4; duration: 600 }
+                }
+            }
 
             // CONNECT STATE
             Rectangle {
@@ -373,8 +353,6 @@ Window {
                 }
             }
 
-            Item { width: 1; height: 6 }
-
             // IDLE STATE
             Rectangle {
                 width: 240; height: 50; radius: 4
@@ -391,8 +369,6 @@ Window {
                     anchors.centerIn: parent
                 }
             }
-
-            Item { width: 1; height: 6 }
 
             // OPERATIVE STATE
             Rectangle {
@@ -430,18 +406,61 @@ Window {
 
         Column {
             anchors.centerIn: parent
-            spacing: 15
-            Text { text: "SPEED"; font.pixelSize: 22; font.bold: true; color: "#D6E1FF"; anchors.horizontalCenter: parent.horizontalCenter }
+            spacing: 20
+
+            // Titel
+            Text {
+                text: "SPEED"
+                font.pixelSize: 13
+                font.bold: true
+                font.family: "Eurostile"
+                color: "#AFC7FF"
+                opacity: 0.6
+                anchors.horizontalCenter: parent.horizontalCenter
+                font.letterSpacing: 3
+            }
+
+            // Stor siffra
+            Text {
+                text: window.speed
+                font.pixelSize: 80
+                font.bold: true
+                font.family: "Eurostile"
+                color: "#D6E1FF"
+                anchors.horizontalCenter: parent.horizontalCenter
+            }
+
+            // Enhet
+            Text {
+                text: "km/h"
+                font.pixelSize: 16
+                font.bold: true
+                font.family: "Eurostile"
+                color: "#AFC7FF"
+                opacity: 0.5
+                anchors.horizontalCenter: parent.horizontalCenter
+                font.letterSpacing: 2
+            }
+
+            // Progressbar
             Rectangle {
-                width: 200; height: 30; radius: 4
-                color: "#0B0E14"; border.color: "#3A4A66"; border.width: 2
+                width: 220; height: 6; radius: 3
+                anchors.horizontalCenter: parent.horizontalCenter
+                color: "#0B0E14"
+                border.color: "#2A3A55"
+                border.width: 1
+
                 Rectangle {
                     height: parent.height
-                    width: Math.min(parent.width, window.speed * 2)
-                    color: "#D6E1FF"
+                    width: Math.min(parent.width, window.speed / 120 * parent.width)
+                    radius: 3
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.0; color: "#AFC7FF" }
+                        GradientStop { position: 1.0; color: "#00CFFF" }
+                    }
                 }
             }
-            Text { text: "Speed: " + window.speed + " km/h"; font.pixelSize: 18; color: "#D6E1FF"; anchors.horizontalCenter: parent.horizontalCenter }
         }
     }
 
