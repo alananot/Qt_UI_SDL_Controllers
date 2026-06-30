@@ -173,7 +173,6 @@ Window {
             fillMode: Image.PreserveAspectFit
         }
 
-        // Connection lampa på intro - blinkar gult i connect state (req 2211)
         Rectangle {
             id: intro_lamp
             width: 24; height: 24; radius: 12
@@ -217,7 +216,6 @@ Window {
                 fadeOutHUD.start()
                 fadeInAnimation2.start()
                 status = "operative"
-                // Operative state: solid Green (req 2221)
                 status_light.color = "green"
                 client.sendMessage(status)
                 is_idle_time.start()
@@ -237,7 +235,6 @@ Window {
                 if (status == "Intro") {
                     if (locked) return
                     locked = true
-                    // Connect state: flashing Yellow (req 2211)
                     intro_lamp.color = "yellow"
                     intro_text.text = "Trying to Connect"
                     client.connectToHost("192.168.1.146", 2222)
@@ -267,7 +264,6 @@ Window {
         }
     }
 
-    // Graferna längst ner
     Row {
         anchors.bottom: parent.bottom
         anchors.left: parent.left
@@ -292,7 +288,6 @@ Window {
         }
     }
 
-    // Vänster kolumn - States
     Rectangle {
         id: statesPanel
         anchors.left: parent.left
@@ -307,26 +302,19 @@ Window {
         border.width: 2
         radius: 4
 
-        // States + LED centrerade i panelen
         Column {
             anchors.centerIn: parent
             spacing: 10
 
-            // RGB Status Indicator LED (req 2211/2221/2231)
-            // - Connect state:   flashing Yellow
-            // - Operative state: solid Green
-            // - Idle state:      solid White
             Rectangle {
                 id: status_light
                 width: 22; height: 22; radius: 11
                 color: "yellow"
                 anchors.horizontalCenter: parent.horizontalCenter
 
-                // Glow-effekt
                 layer.enabled: true
                 layer.effect: null
 
-                // Flashing Yellow animation - only active in Connect state (req 2211)
                 SequentialAnimation on opacity {
                     id: connectBlink
                     loops: Animation.Infinite
@@ -336,7 +324,6 @@ Window {
                 }
             }
 
-            // CONNECT STATE
             Rectangle {
                 width: 240; height: 50; radius: 4
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -353,7 +340,6 @@ Window {
                 }
             }
 
-            // IDLE STATE
             Rectangle {
                 width: 240; height: 50; radius: 4
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -370,7 +356,6 @@ Window {
                 }
             }
 
-            // OPERATIVE STATE
             Rectangle {
                 width: 240; height: 50; radius: 4
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -389,7 +374,6 @@ Window {
         }
     }
 
-    // Höger kolumn - Speed
     Rectangle {
         id: speedPanel
         anchors.right: parent.right
@@ -408,7 +392,6 @@ Window {
             anchors.centerIn: parent
             spacing: 20
 
-            // Titel
             Text {
                 text: "SPEED"
                 font.pixelSize: 13
@@ -420,7 +403,6 @@ Window {
                 font.letterSpacing: 3
             }
 
-            // Stor siffra
             Text {
                 text: window.speed
                 font.pixelSize: 80
@@ -430,7 +412,6 @@ Window {
                 anchors.horizontalCenter: parent.horizontalCenter
             }
 
-            // Enhet
             Text {
                 text: "km/h"
                 font.pixelSize: 16
@@ -442,7 +423,6 @@ Window {
                 font.letterSpacing: 2
             }
 
-            // Progressbar
             Rectangle {
                 width: 220; height: 6; radius: 3
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -489,7 +469,12 @@ Window {
             cache: false
             visible: turretItem.showFirst
             onStatusChanged: {
-                if (status === Image.Ready) turretItem.showFirst = true
+                if (status === Image.Ready) {
+                    turretItem.showFirst = true
+                    feedTimer.waitingForLoad = false
+                } else if (status === Image.Error) {
+                    feedTimer.waitingForLoad = false
+                }
             }
         }
 
@@ -500,15 +485,24 @@ Window {
             cache: false
             visible: !turretItem.showFirst
             onStatusChanged: {
-                if (status === Image.Ready) turretItem.showFirst = false
+                if (status === Image.Ready) {
+                    turretItem.showFirst = false
+                    feedTimer.waitingForLoad = false
+                } else if (status === Image.Error) {
+                    feedTimer.waitingForLoad = false
+                }
             }
         }
 
         Timer {
-            interval: 150
+            id: feedTimer
+            interval: 33
             running: true
             repeat: true
+            property bool waitingForLoad: false
             onTriggered: {
+                if (feedTimer.waitingForLoad) return
+                feedTimer.waitingForLoad = true
                 var url = "http://192.168.1.200:8080/video_frame?t=" + Date.now()
                 if (turretItem.showFirst) {
                     feed2.source = url
@@ -654,7 +648,6 @@ Window {
         onTriggered: intro.locked = false
     }
 
-    // Idle timer: 5 minuter = 300 000 ms (req 2231)
     Timer {
         id: is_idle_time
         interval: 300000
@@ -662,7 +655,6 @@ Window {
         onTriggered: {
             if (status != "Intro" && status != "error") {
                 window.isidle = true
-                // Idle state: solid White (req 2231)
                 status_light.color = "white"
             }
         }
@@ -671,12 +663,10 @@ Window {
     function reset_idle() {
         window.isidle = false
         if (status != "Intro" && status != "error") {
-            // Operative state: solid Green (req 2221)
             status_light.color = "green"
         } else if (status == "error") {
             status_light.color = "red"
         } else {
-            // Connect state: flashing Yellow (req 2211) - animation driven by color binding
             status_light.color = "yellow"
         }
         client.sendMessage(status)
