@@ -40,6 +40,12 @@ Window {
     property int right_trig: 0
     property int left_trig: 0
 
+    // Antal missiler kvar (0-3). 3 = alla laddade (röda), 0 = alla avfyrade (vita).
+    property int missilesRemaining: 3
+
+    // Styr om tutorial-skärmen visas
+    property bool showTutorial: false
+
     Timer {
         interval: 80
         running: true
@@ -53,6 +59,8 @@ Window {
                     window.lockedOn = data.locked
                     window.targetX = data.cx
                     window.targetY = data.cy
+                    // Om servern rapporterar ammo, styr ikonerna därifrån.
+                    if (data.missiles !== undefined) window.missilesRemaining = data.missiles
                 }
             }
             xhr.send()
@@ -132,6 +140,82 @@ Window {
                 startX: 0
                 startY: graphRoot.height / 2
                 PathPolyline { path: graphRoot.points }
+            }
+        }
+    }
+
+    /* ---------------- MISSILE ICON ---------------- */
+    component Missile: Item {
+        id: missileRoot
+        property bool loaded: true          // true = laddad (röd), false = avfyrad (vit)
+        property color loadedColor: "#FF3B3B"
+        property color spentColor: "#FFFFFF"
+        width: 26
+        height: 72
+
+        // Röd glow bakom missilen, bara när den är laddad
+        Canvas {
+            id: glow
+            anchors.centerIn: parent
+            width: parent.width + 26
+            height: parent.height + 26
+            visible: missileRoot.loaded
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.clearRect(0, 0, width, height)
+                var g = ctx.createRadialGradient(width/2, height/2, 2, width/2, height/2, width/2)
+                g.addColorStop(0, "rgba(255,59,59,0.55)")
+                g.addColorStop(1, "rgba(255,59,59,0.0)")
+                ctx.fillStyle = g
+                ctx.fillRect(0, 0, width, height)
+            }
+            onVisibleChanged: if (visible) requestPaint()
+            Component.onCompleted: requestPaint()
+            SequentialAnimation on opacity {
+                loops: Animation.Infinite
+                running: missileRoot.loaded
+                NumberAnimation { from: 0.4; to: 1.0; duration: 800 }
+                NumberAnimation { from: 1.0; to: 0.4; duration: 800 }
+            }
+        }
+
+        // Själva missilen (nosspets + kropp + fenor)
+        Canvas {
+            id: missileBody
+            anchors.fill: parent
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.clearRect(0, 0, width, height)
+                var col = missileRoot.loaded ? missileRoot.loadedColor : missileRoot.spentColor
+                ctx.fillStyle = col
+                var cx = width / 2
+                // nosspets
+                ctx.beginPath()
+                ctx.moveTo(cx, 2)
+                ctx.lineTo(cx - 7, 20)
+                ctx.lineTo(cx + 7, 20)
+                ctx.closePath()
+                ctx.fill()
+                // kropp
+                ctx.fillRect(cx - 7, 20, 14, height - 40)
+                // vänster fena
+                ctx.beginPath()
+                ctx.moveTo(cx - 7, height - 22)
+                ctx.lineTo(cx - 14, height - 2)
+                ctx.lineTo(cx - 7, height - 8)
+                ctx.closePath()
+                ctx.fill()
+                // höger fena
+                ctx.beginPath()
+                ctx.moveTo(cx + 7, height - 22)
+                ctx.lineTo(cx + 14, height - 2)
+                ctx.lineTo(cx + 7, height - 8)
+                ctx.closePath()
+                ctx.fill()
+            }
+            Connections {
+                target: missileRoot
+                function onLoadedChanged() { missileBody.requestPaint() }
             }
         }
     }
@@ -560,6 +644,21 @@ Window {
                 function onLockedOnChanged() { parent.requestPaint() }
             }
         }
+
+        /* ---- MISSILER: 3 ikoner längst ner i kameravyn (bredvid siktet) ---- */
+        Row {
+            id: missileRow
+            anchors.bottom: parent.bottom
+            anchors.left: parent.left
+            anchors.bottomMargin: 16
+            anchors.leftMargin: 24
+            spacing: 28
+            z: 5
+
+            Missile { loaded: window.missilesRemaining >= 1 }
+            Missile { loaded: window.missilesRemaining >= 2 }
+            Missile { loaded: window.missilesRemaining >= 3 }
+        }
     }
 
     SdlHelper {
@@ -572,8 +671,8 @@ Window {
                 case 1: b = 1; break
                 case 2: x = 1; break
                 case 3: y = 1; break
-                case 9: shoulder_l = 1; break
-                case 10: shoulder_r = 1; break
+                case 9: shoulder_l = 1; reloadMissiles(); break   // vänster axelknapp = ladda om
+                case 10: shoulder_r = 1; fireMissile(); break     // höger axelknapp = avfyra
                 }
                 tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
             }
@@ -641,6 +740,139 @@ Window {
         onClicked: window.close()
     }
 
+    // Öppnar tutorial-skärmen (samma stil som Quit, men i högra hörnet)
+    Button {
+        z: 11
+        id: tutorialBtn
+        text: "Tutorial"
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: 20
+        font.pixelSize: 18
+        font.bold: true
+        font.family: "Eurostile"
+        background: Rectangle {
+            radius: 4
+            color: "#1A2333"
+            border.color: "#3A4A66"
+            border.width: 2
+        }
+        contentItem: Text {
+            text: tutorialBtn.text
+            anchors.centerIn: parent
+            color: "#AFC7FF"
+            font: tutorialBtn.font
+        }
+        onClicked: window.showTutorial = true
+    }
+
+    /* ---------------- TUTORIAL SCREEN ---------------- */
+    Rectangle {
+        id: tutorialScreen
+        anchors.fill: parent
+        color: "#0B0E14"
+        visible: window.showTutorial
+        z: 20
+
+        Canvas {
+            anchors.fill: parent
+            opacity: 0.18
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.strokeStyle = "#1A2333"
+                ctx.lineWidth = 1
+                for (var x = 0; x < width; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke() }
+                for (var y = 0; y < height; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
+            }
+        }
+
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: 140
+            text: "TUTORIAL"
+            font.pixelSize: 48
+            font.bold: true
+            font.family: "Eurostile"
+            font.letterSpacing: 6
+            color: "#AFC7FF"
+        }
+
+        Column {
+            anchors.centerIn: parent
+            spacing: 24
+
+            Text {
+                text: "Vänster joystick - köra bilen"
+                font.pixelSize: 26
+                font.family: "Eurostile"
+                color: "#D6E1FF"
+            }
+            Text {
+                text: "Höger joystick - styra roboten"
+                font.pixelSize: 26
+                font.family: "Eurostile"
+                color: "#D6E1FF"
+            }
+            Text {
+                text: "R1 - skjuta"
+                font.pixelSize: 26
+                font.family: "Eurostile"
+                color: "#D6E1FF"
+            }
+        }
+
+        // Tillbaka-knapp (höger hörn)
+        Button {
+            id: backBtn
+            text: "Tillbaka"
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 20
+            font.pixelSize: 18
+            font.bold: true
+            font.family: "Eurostile"
+            background: Rectangle {
+                radius: 4
+                color: "#1A2333"
+                border.color: "#3A4A66"
+                border.width: 2
+            }
+            contentItem: Text {
+                text: backBtn.text
+                anchors.centerIn: parent
+                color: "#AFC7FF"
+                font: backBtn.font
+            }
+            onClicked: window.showTutorial = false
+        }
+
+        // Quit-knapp (vänster hörn)
+        Button {
+            id: tutorialQuit
+            text: "Quit"
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.margins: 20
+            font.pixelSize: 18
+            font.bold: true
+            font.family: "Eurostile"
+            background: Rectangle {
+                radius: 4
+                color: "#8A1F1F"
+                border.color: "#C44A4A"
+                border.width: 2
+            }
+            contentItem: Text {
+                text: tutorialQuit.text
+                anchors.centerIn: parent
+                color: "white"
+                font: tutorialQuit.font
+            }
+            onClicked: window.close()
+        }
+    }
+
     Timer {
         id: lockTimer
         interval: 1500
@@ -671,6 +903,17 @@ Window {
         }
         client.sendMessage(status)
         is_idle_time.restart()
+    }
+
+    // Avfyra en missil (gör nästa ikon vit). Stannar på 0.
+    function fireMissile() {
+        if (window.missilesRemaining > 0)
+            window.missilesRemaining -= 1
+    }
+
+    // Ladda om alla missiler (alla ikoner röda igen).
+    function reloadMissiles() {
+        window.missilesRemaining = 3
     }
 
     PropertyAnimation { id: fadeOutAnimation;  target: fadeoutintro; property: "opacity"; to: 0.0; duration: 1000 }
