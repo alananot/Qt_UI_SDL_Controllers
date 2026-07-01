@@ -606,7 +606,12 @@ Window {
             cache: false
             visible: turretItem.showFirst
             onStatusChanged: {
-                if (status === Image.Ready) turretItem.showFirst = true
+                if (status === Image.Ready) {
+                    turretItem.showFirst = true
+                    feedTimer.waitingForLoad = false
+                } else if (status === Image.Error) {
+                    feedTimer.waitingForLoad = false
+                }
             }
         }
 
@@ -617,15 +622,24 @@ Window {
             cache: false
             visible: !turretItem.showFirst
             onStatusChanged: {
-                if (status === Image.Ready) turretItem.showFirst = false
+                if (status === Image.Ready) {
+                    turretItem.showFirst = false
+                    feedTimer.waitingForLoad = false
+                } else if (status === Image.Error) {
+                    feedTimer.waitingForLoad = false
+                }
             }
         }
 
         Timer {
-            interval: 150
+            id: feedTimer
+            interval: 33
             running: true
             repeat: true
+            property bool waitingForLoad: false
             onTriggered: {
+                if (feedTimer.waitingForLoad) return
+                feedTimer.waitingForLoad = true
                 var url = "http://192.168.1.200:8080/video_frame?t=" + Date.now()
                 if (turretItem.showFirst) {
                     feed2.source = url
@@ -908,7 +922,7 @@ Window {
                 color: "#D6E1FF"
             }
             Text {
-                text: "X = vänster missil styrning"
+                text: "X = Vänster Missilstyrning"
                 font.pixelSize: 30
                 font.bold: true
                 font.family: "Eurostile"
