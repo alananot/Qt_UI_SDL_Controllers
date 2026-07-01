@@ -14,8 +14,12 @@ Window {
     visibility: Window.FullScreen
     title: "Saab System UI"
     color: "#0B0E14"
-    property bool locked: false
+
     property bool lockedOn: false
+    property var canisters: []
+    property bool canister1: false
+    property bool canister2: false
+    property bool canister3: false
     property int targetX: 0
     property int targetY: 0
     property int speed: 0
@@ -39,12 +43,18 @@ Window {
     property real y2_movement: 0.0
     property int right_trig: 0
     property int left_trig: 0
-    property var missiles: []
-    // Antal missiler kvar (0-3). 3 = alla laddade (röda), 0 = alla avfyrade (vita).
-    property int missilesRemaining: 0
 
-    // Styr om tutorial-skärmen visas
-    property bool showTutorial: false
+    // Ökas för att tvinga missil-ikonerna att rita om (t.ex. efter tutorial)
+    property int missileRepaint: 0
+
+    // Vald missil: 0 = vänster, 1 = mitten, 2 = höger (börjar i mitten)
+    property int selectedMissile: 1
+
+    // Lokalt laddstatus per position (styrs av valet, inte serverns ordning).
+    // true = laddad (röd), false = avfyrad (vit)
+    property bool mLeft: true
+    property bool mMid: true
+    property bool mRight: true
 
     Timer {
         interval: 80
@@ -59,8 +69,6 @@ Window {
                     window.lockedOn = data.locked
                     window.targetX = data.cx
                     window.targetY = data.cy
-                    // Om servern rapporterar ammo, styr ikonerna därifrån.
-                    if (data.missiles !== undefined) window.missilesRemaining = data.missiles
                 }
             }
             xhr.send()
@@ -72,33 +80,23 @@ Window {
         onConnected: console.log("Connected to server")
         onMessageRecieved: socketValue = parseInt(msg)
     }
-    TcpClient { id: tcpButtons;
-        onConnected:{ console.log("Buttons connected")}
-
+    TcpClient {
+        id: tcpButtons;
+        onConnected: console.log("Buttons connected")
         onMessageRecieved: {
-                    missiles = msg
+            canisters = msg
+            // Plocka ut True/False i ordning så ikonerna blir röd/vit korrekt
+            var vals = msg.toString().match(/true|false/gi)
+            if (vals && vals.length >= 3) {
+                canister1 = (vals[0].toLowerCase() === "true")
+                canister2 = (vals[1].toLowerCase() === "true")
+                canister3 = (vals[2].toLowerCase() === "true")
+            }
+            console.log(canisters)
+        }
 
-                    console.log(missiles[1])
 
-                    for(let i = 0; i < missiles.length; i++ )
-                    {
-                        if(missiles[i])
-                        {
-                            missilesRemaining += 1
-                            console.log("Ammo yes" +  i)
-                        }
-                        else if(missilesRemaining <= 0)
-                        {
-                            missilesRemaining -= 1
-                            console.log("Ammo no" +  i)
-                        }
-                        else
-                        {
-                            missilesRemaining = 0
-                            console.log("Ammo empty" )
-                        }
-                    }
-                }
+
     }
     TcpClient { id: tcpJoystick; onConnected: console.log("Joysticks connected") }
 
@@ -175,10 +173,31 @@ Window {
     component Missile: Item {
         id: missileRoot
         property bool loaded: true          // true = laddad (röd), false = avfyrad (vit)
+        property bool selected: false       // markerad med B/X-väljaren
         property color loadedColor: "#FF3B3B"
         property color spentColor: "#FFFFFF"
+        property int repaintKey: 0          // ändras -> tvinga omritning
         width: 26
         height: 72
+
+        // Markeringsram runt vald missil (cyan, pulserande)
+        Rectangle {
+            anchors.centerIn: parent
+            width: parent.width + 18
+            height: parent.height + 18
+            radius: 6
+            color: "transparent"
+            border.color: "#00E5FF"
+            border.width: 3
+            visible: missileRoot.selected
+            z: 2
+            SequentialAnimation on opacity {
+                running: missileRoot.selected
+                loops: Animation.Infinite
+                NumberAnimation { from: 0.5; to: 1.0; duration: 600 }
+                NumberAnimation { from: 1.0; to: 0.5; duration: 600 }
+            }
+        }
 
         // Röd glow bakom missilen, bara när den är laddad
         Canvas {
@@ -198,6 +217,10 @@ Window {
             }
             onVisibleChanged: if (visible) requestPaint()
             Component.onCompleted: requestPaint()
+            Connections {
+                target: missileRoot
+                function onRepaintKeyChanged() { if (glow.visible) glow.requestPaint() }
+            }
             SequentialAnimation on opacity {
                 loops: Animation.Infinite
                 running: missileRoot.loaded
@@ -243,6 +266,7 @@ Window {
             Connections {
                 target: missileRoot
                 function onLoadedChanged() { missileBody.requestPaint() }
+                function onRepaintKeyChanged() { missileBody.requestPaint() }
             }
         }
     }
@@ -284,6 +308,7 @@ Window {
             fillMode: Image.PreserveAspectFit
         }
 
+        // Connection lampa på intro - blinkar gult i connect state (req 2211)
         Rectangle {
             id: intro_lamp
             width: 24; height: 24; radius: 12
@@ -327,18 +352,19 @@ Window {
                 fadeOutHUD.start()
                 fadeInAnimation2.start()
                 status = "operative"
+                // Operative state: solid Green (req 2221)
                 status_light.color = "green"
                 client.sendMessage(status)
                 is_idle_time.start()
             }
             onErrorOccurred: {
-                status = "error"
+                if(status != "Intro"){
+                status = "error"}
                 intro_lamp.color = "red"
                 intro_text.text = "Error: " + err
                 status_light.color = "red"
             }
         }
-
 
 
     }
@@ -358,6 +384,7 @@ Window {
         }
     }
 
+    // Graferna längst ner
     Row {
         anchors.bottom: parent.bottom
         anchors.left: parent.left
@@ -382,6 +409,7 @@ Window {
         }
     }
 
+    // Vänster kolumn - States
     Rectangle {
         id: statesPanel
         anchors.left: parent.left
@@ -396,19 +424,26 @@ Window {
         border.width: 2
         radius: 4
 
+        // States + LED centrerade i panelen
         Column {
             anchors.centerIn: parent
             spacing: 10
 
+            // RGB Status Indicator LED (req 2211/2221/2231)
+            // - Connect state:   flashing Yellow
+            // - Operative state: solid Green
+            // - Idle state:      solid White
             Rectangle {
                 id: status_light
                 width: 22; height: 22; radius: 11
                 color: "yellow"
                 anchors.horizontalCenter: parent.horizontalCenter
 
+                // Glow-effekt
                 layer.enabled: true
                 layer.effect: null
 
+                // Flashing Yellow animation - only active in Connect state (req 2211)
                 SequentialAnimation on opacity {
                     id: connectBlink
                     loops: Animation.Infinite
@@ -418,6 +453,7 @@ Window {
                 }
             }
 
+            // CONNECT STATE
             Rectangle {
                 width: 240; height: 50; radius: 4
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -434,6 +470,7 @@ Window {
                 }
             }
 
+            // IDLE STATE
             Rectangle {
                 width: 240; height: 50; radius: 4
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -450,6 +487,7 @@ Window {
                 }
             }
 
+            // OPERATIVE STATE
             Rectangle {
                 width: 240; height: 50; radius: 4
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -468,6 +506,7 @@ Window {
         }
     }
 
+    // Höger kolumn - Speed
     Rectangle {
         id: speedPanel
         anchors.right: parent.right
@@ -486,6 +525,7 @@ Window {
             anchors.centerIn: parent
             spacing: 20
 
+            // Titel
             Text {
                 text: "SPEED"
                 font.pixelSize: 13
@@ -497,6 +537,7 @@ Window {
                 font.letterSpacing: 3
             }
 
+            // Stor siffra
             Text {
                 text: window.speed
                 font.pixelSize: 80
@@ -506,6 +547,7 @@ Window {
                 anchors.horizontalCenter: parent.horizontalCenter
             }
 
+            // Enhet
             Text {
                 text: "km/h"
                 font.pixelSize: 16
@@ -517,6 +559,7 @@ Window {
                 font.letterSpacing: 2
             }
 
+            // Progressbar
             Rectangle {
                 width: 220; height: 6; radius: 3
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -563,12 +606,7 @@ Window {
             cache: false
             visible: turretItem.showFirst
             onStatusChanged: {
-                if (status === Image.Ready) {
-                    turretItem.showFirst = true
-                    feedTimer.waitingForLoad = false
-                } else if (status === Image.Error) {
-                    feedTimer.waitingForLoad = false
-                }
+                if (status === Image.Ready) turretItem.showFirst = true
             }
         }
 
@@ -579,24 +617,15 @@ Window {
             cache: false
             visible: !turretItem.showFirst
             onStatusChanged: {
-                if (status === Image.Ready) {
-                    turretItem.showFirst = false
-                    feedTimer.waitingForLoad = false
-                } else if (status === Image.Error) {
-                    feedTimer.waitingForLoad = false
-                }
+                if (status === Image.Ready) turretItem.showFirst = false
             }
         }
 
         Timer {
-            id: feedTimer
-            interval: 33
+            interval: 150
             running: true
             repeat: true
-            property bool waitingForLoad: false
             onTriggered: {
-                if (feedTimer.waitingForLoad) return
-                feedTimer.waitingForLoad = true
                 var url = "http://192.168.1.200:8080/video_frame?t=" + Date.now()
                 if (turretItem.showFirst) {
                     feed2.source = url
@@ -655,7 +684,10 @@ Window {
             }
         }
 
-        /* ---- MISSILER: 3 ikoner längst ner i kameravyn (bredvid siktet) ---- */
+        /* ---- MISSILER: 3 ikoner nere till vänster i kameravyn ----
+           Röd = laddad (canister true), vit = avfyrad (canister false).
+           Styrs av window.canister1/2/3 som redan kommer via tcpButtons.
+           Rent visuellt - rör inte anslutning eller meddelanden. */
         Row {
             id: missileRow
             anchors.bottom: parent.bottom
@@ -665,19 +697,26 @@ Window {
             spacing: 28
             z: 5
 
-            Missile { loaded: window.missilesRemaining >= 1 }
-            Missile { loaded: window.missilesRemaining >= 2 }
-            Missile { loaded: window.missilesRemaining >= 3 }
+            // Ordning L->R: vänster, mitten, höger.
+            // loaded styrs lokalt av valet så att R1/L1 bara påverkar vald missil.
+            // selectedMissile: 0 = vänster, 1 = mitten, 2 = höger.
+            Missile { loaded: window.mLeft;  selected: window.selectedMissile === 0; repaintKey: window.missileRepaint }
+            Missile { loaded: window.mMid;   selected: window.selectedMissile === 1; repaintKey: window.missileRepaint }
+            Missile { loaded: window.mRight; selected: window.selectedMissile === 2; repaintKey: window.missileRepaint }
         }
     }
 
     SdlHelper {
         id: sdl
+        property bool locked: false
+        property bool l1Latched: false      // L1 laddar bara om en gång per tryck
         onButtonPressed: {
             reset_idle()
+
             if (status == "Intro") {
                 if (locked) return
                 locked = true
+                // Connect state: flashing Yellow (req 2211)
                 intro_lamp.color = "yellow"
                 intro_text.text = "Trying to Connect"
                 client.connectToHost("192.168.1.146", 2222)
@@ -686,16 +725,29 @@ Window {
                 tcpJoystick.connectToHost("192.168.1.146", 2225)
                 lockTimer.start()
             }
-            if (status !== "Intro") {
+            else if(status !== "Intro") {
                 switch(button) {
                 case 0: a = 1; break
-                case 1: b = 1; break
-                case 2: x = 1; break
+                case 1: b = 1; window.selectedMissile = Math.min(2, window.selectedMissile + 1); break   // B -> välj höger missil
+                case 2: x = 1; window.selectedMissile = Math.max(0, window.selectedMissile - 1); break   // X -> välj vänster missil
                 case 3: y = 1; break
-                case 9: shoulder_l = 1;  break   // vänster axelknapp = ladda om
-                case 10: shoulder_r = 1; break     // höger axelknapp = avfyra
+                case 9:
+                    // L1: ladda om den VALDA missilen, en gång per tryck
+                    if (sdl.l1Latched) return
+                    sdl.l1Latched = true
+                    reloadSelected()
+                    shoulder_l = 1
+                    sendButtons()
+                    shoulder_l = 0
+                    break
+                case 10:
+                    // R1: avfyra den VALDA missilen
+                    shoulder_r = 1
+                    fireSelected()
+                    break
                 }
-                tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
+
+                sendButtons()
             }
         }
         onButtonReleased: {
@@ -705,10 +757,10 @@ Window {
                 case 1: b = 0; break
                 case 2: x = 0; break
                 case 3: y = 0; break
-                case 9: shoulder_l = 0; break
+                case 9: shoulder_l = 0; sdl.l1Latched = false; break
                 case 10: shoulder_r = 0; break
                 }
-                tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
+                sendButtons()
             }
         }
         onAxisMoved: {
@@ -721,6 +773,8 @@ Window {
                 case 3: y2_movement = Math.abs(value) > 2000 ? value : 0; break
                 }
                 if (Math.abs(value) > 2000) reset_idle()
+
+
                 tcpJoystick.sendMessage(x1_movement + "," + y1_movement + "," + x2_movement + "," + y2_movement + "," + right_trig + "," + left_trig)
             }
         }
@@ -737,7 +791,7 @@ Window {
     }
 
     Button {
-        z: 11
+        z: 12
         id: quit
         text: "Quit"
         anchors.left: parent.left
@@ -760,11 +814,9 @@ Window {
         }
         onClicked: window.close()
     }
-
-    // Öppnar tutorial-skärmen (samma stil som Quit, men i högra hörnet)
-    Button {
-        z: 11
-        id: tutorialBtn
+    Button{
+        id: tutorialButton
+        z: 12
         text: "Tutorial"
         visible: window.status === "operative" || window.status === "Operative"
         anchors.right: parent.right
@@ -775,27 +827,30 @@ Window {
         font.family: "Eurostile"
         background: Rectangle {
             radius: 4
-            color: "#1A2333"
-            border.color: "#3A4A66"
-            border.width: 2
+            color: "#0B0E14"
+            border.color: "#0B0E14"
+            border.width: 2}
+        onClicked: {
+            if(tutorial.visible === false)
+            tutorial.visible = true
+            else
+                tutorial.visible = false
         }
-        contentItem: Text {
-            text: tutorialBtn.text
-            anchors.centerIn: parent
-            color: "#AFC7FF"
-            font: tutorialBtn.font
-        }
-        onClicked: window.showTutorial = true
+
     }
 
     /* ---------------- TUTORIAL SCREEN ---------------- */
-    Rectangle {
-        id: tutorialScreen
+    Rectangle{
+        id: tutorial
         anchors.fill: parent
+        visible: false
         color: "#0B0E14"
-        visible: window.showTutorial
         z: 20
 
+        // När tutorial stängs: rita om missilerna (Canvas tappar innehåll när den täcks)
+        onVisibleChanged: if (!visible) window.missileRepaint++
+
+        // Rutnätsbakgrund
         Canvas {
             anchors.fill: parent
             opacity: 0.18
@@ -825,54 +880,47 @@ Window {
             spacing: 24
 
             Text {
-                text: "Vänster joystick - köra bilen"
-                font.pixelSize: 26
+                text: "Vänster Joystick = Styrning"
+                font.pixelSize: 30
+                font.bold: true
                 font.family: "Eurostile"
                 color: "#D6E1FF"
             }
             Text {
-                text: "Höger joystick - styra roboten"
-                font.pixelSize: 26
+                text: "Höger joystick = Robot"
+                font.pixelSize: 30
+                font.bold: true
                 font.family: "Eurostile"
                 color: "#D6E1FF"
             }
             Text {
-                text: "R1 - skjuta"
-                font.pixelSize: 26
+                text: "R1 = Skjuta"
+                font.pixelSize: 30
+                font.bold: true
                 font.family: "Eurostile"
                 color: "#D6E1FF"
             }
             Text {
-                text: "L1 - ladda om (en i taget)"
-                font.pixelSize: 26
+                text: "L1 = ladda om"
+                font.pixelSize: 30
+                font.bold: true
                 font.family: "Eurostile"
                 color: "#D6E1FF"
             }
-        }
-
-        // Tillbaka-knapp (höger hörn)
-        Button {
-            id: backBtn
-            text: "Tillbaka"
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.margins: 20
-            font.pixelSize: 18
-            font.bold: true
-            font.family: "Eurostile"
-            background: Rectangle {
-                radius: 4
-                color: "#1A2333"
-                border.color: "#3A4A66"
-                border.width: 2
+            Text {
+                text: "X = vänster missil styrning"
+                font.pixelSize: 30
+                font.bold: true
+                font.family: "Eurostile"
+                color: "#D6E1FF"
             }
-            contentItem: Text {
-                text: backBtn.text
-                anchors.centerIn: parent
-                color: "#AFC7FF"
-                font: backBtn.font
+            Text {
+                text: "B = Höger missilstyrning"
+                font.pixelSize: 30
+                font.bold: true
+                font.family: "Eurostile"
+                color: "#D6E1FF"
             }
-            onClicked: window.showTutorial = false
         }
 
         // Quit-knapp (vänster hörn)
@@ -899,15 +947,41 @@ Window {
             }
             onClicked: window.close()
         }
+
+        // Tillbaka-knapp (höger hörn)
+        Button {
+            id: backBtn
+            text: "Tillbaka"
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 20
+            font.pixelSize: 18
+            font.bold: true
+            font.family: "Eurostile"
+            background: Rectangle {
+                radius: 4
+                color: "#1A2333"
+                border.color: "#3A4A66"
+                border.width: 2
+            }
+            contentItem: Text {
+                text: backBtn.text
+                anchors.centerIn: parent
+                color: "#AFC7FF"
+                font: backBtn.font
+            }
+            onClicked: tutorial.visible = false
+        }
     }
 
     Timer {
         id: lockTimer
         interval: 1500
         repeat: false
-        onTriggered: intro.locked = false
+        onTriggered: sdl.locked = false
     }
 
+    // Idle timer: 5 minuter = 300 000 ms (req 2231)
     Timer {
         id: is_idle_time
         interval: 300000
@@ -915,29 +989,47 @@ Window {
         onTriggered: {
             if (status != "Intro" && status != "error") {
                 window.isidle = true
+                // Idle state: solid White (req 2231)
                 status_light.color = "white"
             }
         }
     }
 
+    // Bygger knapp-meddelandet och lägger till vald missil (canister-nummer 1-3)
+    // som 7:e fält, så servern vet vilken missil R1/L1 gäller.
+    // Vänster=canister3, mitten=canister2, höger=canister1  ->  3 - selectedMissile
+    function sendButtons() {
+        tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r + "," + (3 - window.selectedMissile))
+    }
+
+    // Avfyra (vit) den valda missilen
+    function fireSelected() {
+        if (window.selectedMissile === 0) window.mLeft = false
+        else if (window.selectedMissile === 1) window.mMid = false
+        else window.mRight = false
+    }
+
+    // Ladda om (röd) den valda missilen
+    function reloadSelected() {
+        if (window.selectedMissile === 0) window.mLeft = true
+        else if (window.selectedMissile === 1) window.mMid = true
+        else window.mRight = true
+    }
+
     function reset_idle() {
         window.isidle = false
         if (status != "Intro" && status != "error") {
+            // Operative state: solid Green (req 2221)
             status_light.color = "green"
         } else if (status == "error") {
             status_light.color = "red"
         } else {
+            // Connect state: flashing Yellow (req 2211) - animation driven by color binding
             status_light.color = "yellow"
         }
         client.sendMessage(status)
         is_idle_time.restart()
     }
-
-    // Avfyra en missil (gör nästa ikon vit). Stannar på 0.
-
-
-    // Ladda om en missil i taget (max 3).
-
 
     PropertyAnimation { id: fadeOutAnimation;  target: fadeoutintro; property: "opacity"; to: 0.0; duration: 1000 }
     PropertyAnimation { id: fadeOutAnimation2; target: saabLogo;     property: "opacity"; to: 0.0; duration: 1000 }
