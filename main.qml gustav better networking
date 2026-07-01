@@ -743,7 +743,7 @@ Window {
         z: 11
         id: tutorialBtn
         text: "Tutorial"
-        visible: window.status !== "Intro"
+        visible: window.status === "operative" || window.status === "Operative"
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.margins: 20
@@ -815,6 +815,12 @@ Window {
             }
             Text {
                 text: "R1 - skjuta"
+                font.pixelSize: 26
+                font.family: "Eurostile"
+                color: "#D6E1FF"
+            }
+            Text {
+                text: "L1 - ladda om (en i taget)"
                 font.pixelSize: 26
                 font.family: "Eurostile"
                 color: "#D6E1FF"
@@ -910,9 +916,10 @@ Window {
             window.missilesRemaining -= 1
     }
 
-    // Ladda om alla missiler (alla ikoner röda igen).
+    // Ladda om en missil i taget (max 3).
     function reloadMissiles() {
-        window.missilesRemaining = 3
+        if (window.missilesRemaining < 3)
+            window.missilesRemaining += 1
     }
 
     PropertyAnimation { id: fadeOutAnimation;  target: fadeoutintro; property: "opacity"; to: 0.0; duration: 1000 }
