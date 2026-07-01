@@ -39,9 +39,9 @@ Window {
     property real y2_movement: 0.0
     property int right_trig: 0
     property int left_trig: 0
-
+    property var missiles: []
     // Antal missiler kvar (0-3). 3 = alla laddade (röda), 0 = alla avfyrade (vita).
-    property int missilesRemaining: 3
+    property int missilesRemaining: 0
 
     // Styr om tutorial-skärmen visas
     property bool showTutorial: false
@@ -72,9 +72,32 @@ Window {
         onConnected: console.log("Connected to server")
         onMessageRecieved: socketValue = parseInt(msg)
     }
-    TcpClient { id: tcpButtons; onConnected: console.log("Buttons connected")
-                onMessageRecieved: {
+    TcpClient { id: tcpButtons;
+        onConnected:{ console.log("Buttons connected")}
+
+        onMessageRecieved: {
                     missiles = msg
+
+                    console.log(missiles[1])
+
+                    for(let i = 0; i < missiles.length; i++ )
+                    {
+                        if(missiles[i])
+                        {
+                            missilesRemaining += 1
+                            console.log("Ammo yes" +  i)
+                        }
+                        else if(missilesRemaining <= 0)
+                        {
+                            missilesRemaining -= 1
+                            console.log("Ammo no" +  i)
+                        }
+                        else
+                        {
+                            missilesRemaining = 0
+                            console.log("Ammo empty" )
+                        }
+                    }
                 }
     }
     TcpClient { id: tcpJoystick; onConnected: console.log("Joysticks connected") }
@@ -669,8 +692,8 @@ Window {
                 case 1: b = 1; break
                 case 2: x = 1; break
                 case 3: y = 1; break
-                case 9: shoulder_l = 1; reloadMissiles(); break   // vänster axelknapp = ladda om
-                case 10: shoulder_r = 1; fireMissile(); break     // höger axelknapp = avfyra
+                case 9: shoulder_l = 1;  break   // vänster axelknapp = ladda om
+                case 10: shoulder_r = 1; break     // höger axelknapp = avfyra
                 }
                 tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
             }
@@ -911,16 +934,10 @@ Window {
     }
 
     // Avfyra en missil (gör nästa ikon vit). Stannar på 0.
-    function fireMissile() {
-        if (window.missilesRemaining > 0)
-            window.missilesRemaining -= 1
-    }
+
 
     // Ladda om en missil i taget (max 3).
-    function reloadMissiles() {
-        if (window.missilesRemaining < 3)
-            window.missilesRemaining += 1
-    }
+
 
     PropertyAnimation { id: fadeOutAnimation;  target: fadeoutintro; property: "opacity"; to: 0.0; duration: 1000 }
     PropertyAnimation { id: fadeOutAnimation2; target: saabLogo;     property: "opacity"; to: 0.0; duration: 1000 }
