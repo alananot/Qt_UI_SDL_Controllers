@@ -14,7 +14,7 @@ Window {
     visibility: Window.FullScreen
     title: "Saab System UI"
     color: "#0B0E14"
-
+    property bool locked: false
     property bool lockedOn: false
     property int targetX: 0
     property int targetY: 0
@@ -72,7 +72,11 @@ Window {
         onConnected: console.log("Connected to server")
         onMessageRecieved: socketValue = parseInt(msg)
     }
-    TcpClient { id: tcpButtons; onConnected: console.log("Buttons connected") }
+    TcpClient { id: tcpButtons; onConnected: console.log("Buttons connected")
+                onMessageRecieved: {
+                    missiles = msg
+                }
+    }
     TcpClient { id: tcpJoystick; onConnected: console.log("Joysticks connected") }
 
     Timer {
@@ -312,25 +316,8 @@ Window {
             }
         }
 
-        SdlHelper {
-            id: intro
-            property bool locked: false
-            onButtonPressed: {
-                if (status == "Intro") {
-                    if (locked) return
-                    locked = true
-                    intro_lamp.color = "yellow"
-                    intro_text.text = "Trying to Connect"
-                    client.connectToHost("192.168.1.146", 2222)
-                    tcpGraph.connectToHost("192.168.1.146", 2223)
-                    tcpButtons.connectToHost("192.168.1.146", 2224)
-                    tcpJoystick.connectToHost("192.168.1.146", 2225)
-                    lockTimer.start()
-                }
-            }
-        }
 
-        Component.onCompleted: intro.initGamepad()
+
     }
 
     /* ---------------- MAIN UI ---------------- */
@@ -665,6 +652,17 @@ Window {
         id: sdl
         onButtonPressed: {
             reset_idle()
+            if (status == "Intro") {
+                if (locked) return
+                locked = true
+                intro_lamp.color = "yellow"
+                intro_text.text = "Trying to Connect"
+                client.connectToHost("192.168.1.146", 2222)
+                tcpGraph.connectToHost("192.168.1.146", 2223)
+                tcpButtons.connectToHost("192.168.1.146", 2224)
+                tcpJoystick.connectToHost("192.168.1.146", 2225)
+                lockTimer.start()
+            }
             if (status !== "Intro") {
                 switch(button) {
                 case 0: a = 1; break
