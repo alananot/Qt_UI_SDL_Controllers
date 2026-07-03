@@ -50,7 +50,6 @@ Window {
     property bool mMid: true
     property bool mRight: true
 
-    // true när man en gång kopplat upp (topp-baren stannar då kvar, även vid error/röd lampa)
     property bool everOperative: false
 
     Timer {
@@ -325,6 +324,33 @@ Window {
                 NumberAnimation { from: 0.2; to: 1.0; duration: 900 }
                 NumberAnimation { from: 1.0; to: 0.2; duration: 900 }
             }
+        }
+
+        // Quit-knapp alltid synlig på intro-skärmen
+        Button {
+            id: introQuit
+            text: "Quit"
+            width: 120
+            height: 52
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.margins: 20
+            font.pixelSize: 18
+            font.bold: true
+            font.family: "Eurostile"
+            background: Rectangle {
+                radius: 4
+                color: "#8A1F1F"
+                border.color: "#C44A4A"
+                border.width: 2
+            }
+            contentItem: Text {
+                text: introQuit.text
+                anchors.centerIn: parent
+                color: "white"
+                font: introQuit.font
+            }
+            onClicked: window.close()
         }
 
         TcpClient {
@@ -680,7 +706,6 @@ Window {
             Missile { loaded: window.mRight; selected: window.selectedMissile === 2; repaintKey: window.missileRepaint }
         }
 
-        // Radar - egen liten ruta nere till HÖGER (inte över videon)
         Rectangle {
             id: radarBox
             width: 96
@@ -810,7 +835,6 @@ Window {
 
     Component.onCompleted: sdl.initGamepad()
 
-    // Osynlig referens längst ner (panelerna fyller ytan där graferna låg).
     Item {
         id: graphRow
         anchors.bottom: parent.bottom
@@ -819,9 +843,6 @@ Window {
         height: 0
     }
 
-    /* ---------------- TOPP-PANEL (bar med knappar) ----------------
-       Ligger överst (z:12) och täcker toppen av panelerna, så man bara
-       ser kameran och dess nederdel. Visas bara i operative-läge. */
     Rectangle {
         id: topBar
         z: 12
@@ -834,7 +855,6 @@ Window {
         border.color: "#3A4A66"
         border.width: 2
 
-        // fräsch accent-linje längst ner på baren
         Rectangle {
             anchors.left: parent.left
             anchors.right: parent.right
@@ -844,7 +864,6 @@ Window {
             opacity: 0.55
         }
 
-        // Quit (vänster)
         Button {
             id: quit
             text: "Quit"
@@ -871,7 +890,6 @@ Window {
             onClicked: window.close()
         }
 
-        // Två stora knappar (höger)
         Row {
             anchors.right: parent.right
             anchors.rightMargin: 16
@@ -930,7 +948,7 @@ Window {
         }
     }
 
-    /* ---------------- DEBUGS SCREEN ---------------- */
+    /* ---------------- DEBUG SCREEN ---------------- */
     Rectangle {
         id: debugScreen
         anchors.fill: parent
