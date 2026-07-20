@@ -876,7 +876,7 @@ Window {
                 id: debugButton
                 text: "DEBUG"
                 width: 220
-                height: 80
+                height: 58
                 font.pixelSize: 22
                 font.bold: true
                 font.family: "Eurostile"
@@ -941,21 +941,23 @@ Window {
             }
         }
         Text {
+            id: debugTitle
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: parent.top
-            anchors.topMargin: 110
+            anchors.topMargin: 36
             text: "DEBUGS"
-            font.pixelSize: 48
+            font.pixelSize: 40
             font.bold: true
             font.family: "Eurostile"
             font.letterSpacing: 6
             color: "#AFC7FF"
         }
         Grid {
-            anchors.centerIn: parent
-            anchors.verticalCenterOffset: 20
+            anchors.top: debugTitle.bottom
+            anchors.topMargin: 28
+            anchors.horizontalCenter: parent.horizontalCenter
             columns: 3
-            spacing: 24
+            spacing: 20
             Repeater {
                 model: [
                     { label: "DEBUG 1", color: "#AFC7FF" },
@@ -965,22 +967,31 @@ Window {
                     { label: "DEBUG 5", color: "#FF9E3D" },
                     { label: "DEBUG 6", color: "#B388FF" }
                 ]
-                delegate: Column {
-                    spacing: 12
-                    Text {
-                        text: modelData.label
-                        font.pixelSize: 16
-                        font.bold: true
-                        font.family: "Eurostile"
-                        font.letterSpacing: 2
-                        color: modelData.color
-                        anchors.horizontalCenter: parent.horizontalCenter
-                    }
-                    Graph {
-                        width: 380
-                        height: 220
-                        lineColor: modelData.color
-                        dataValue: index % 2 === 0 ? window.socketValue : window.socketValue2
+                delegate: Rectangle {
+                    width: 400
+                    height: 270
+                    radius: 6
+                    color: "#141B2C"
+                    border.color: modelData.color
+                    border.width: 2
+                    Column {
+                        anchors.centerIn: parent
+                        spacing: 10
+                        Text {
+                            text: modelData.label
+                            font.pixelSize: 16
+                            font.bold: true
+                            font.family: "Eurostile"
+                            font.letterSpacing: 2
+                            color: modelData.color
+                            anchors.horizontalCenter: parent.horizontalCenter
+                        }
+                        Graph {
+                            width: 360
+                            height: 210
+                            lineColor: modelData.color
+                            dataValue: index % 2 === 0 ? window.socketValue : window.socketValue2
+                        }
                     }
                 }
             }
@@ -988,6 +999,8 @@ Window {
         Button {
             id: debugQuit
             text: "Quit"
+            width: 120
+            height: 52
             anchors.left: parent.left
             anchors.top: parent.top
             anchors.margins: 20
@@ -1011,6 +1024,8 @@ Window {
         Button {
             id: debugBack
             text: "Tillbaka"
+            width: 120
+            height: 52
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.margins: 20
@@ -1071,6 +1086,8 @@ Window {
         Button {
             id: tutorialQuit
             text: "Quit"
+            width: 120
+            height: 52
             anchors.left: parent.left
             anchors.top: parent.top
             anchors.margins: 20
@@ -1094,6 +1111,8 @@ Window {
         Button {
             id: backBtn
             text: "Tillbaka"
+            width: 120
+            height: 52
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.margins: 20
