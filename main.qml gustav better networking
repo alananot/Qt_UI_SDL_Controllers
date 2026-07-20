@@ -873,6 +873,30 @@ Window {
             anchors.verticalCenter: parent.verticalCenter
             spacing: 16
             Button {
+                id: idleButton
+                text: "IDLE"
+                width: 220
+                height: 58
+                font.pixelSize: 22
+                font.bold: true
+                font.family: "Eurostile"
+                background: Rectangle {
+                    radius: 4
+                    color: "#0B0E14"
+                    border.color: "#3A4A66"
+                    border.width: 2
+                }
+                contentItem: Text {
+                    text: idleButton.text
+                    anchors.centerIn: parent
+                    color: "#AFC7FF"
+                    font: idleButton.font
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                onClicked: enterIdle()
+            }
+            Button {
                 id: debugButton
                 text: "DEBUG"
                 width: 220
@@ -1143,18 +1167,9 @@ Window {
     // Idle timer: 5 minuter = 300 000 ms (req 2231)
     Timer {
         id: is_idle_time
-        interval: 3000
+        interval: 300000
         repeat: false
-        onTriggered: {
-            if (status != "Intro" && status != "error") {
-                status = "idle"
-                window.isidle = true
-                //client.sendMessage(status)
-                // Idle state: solid White (req 2231)
-                status_light.color = "white"
-                idle.start()
-            }
-        }
+        onTriggered: enterIdle()
     }
     Timer{
         id: idle
@@ -1177,6 +1192,15 @@ Window {
             left_trig = 0*/
             console.log("Joystick unmoved")
             tcpJoystick.sendMessage(x1_movement + "," + y1_movement + "," + x2_movement + "," + y2_movement + "," + right_trig + "," + left_trig)
+        }
+    }
+    function enterIdle() {
+        if (status != "Intro" && status != "error") {
+            status = "idle"
+            window.isidle = true
+            // Idle state: solid White (req 2231)
+            status_light.color = "white"
+            idle.start()
         }
     }
     function reset_idle() {
