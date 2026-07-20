@@ -5,7 +5,6 @@ import QtQuick.Window
 import QtQml
 import SDL 1.0
 import Networking 1.0
-
 Window {
     id: window
     width: 1280
@@ -14,7 +13,6 @@ Window {
     visibility: Window.FullScreen
     title: "Saab System UI"
     color: "#0B0E14"
-
     property bool lockedOn: false
     property var canisters: []
     property bool canister1: false
@@ -23,8 +21,8 @@ Window {
     property int targetX: 0
     property int targetY: 0
     property int speed: 0
-    property double socketValue: 0
-    property double socketValue2: 0
+    property real socketValue: 0.0
+    property real socketValue2: 0.0
     property string status: "Intro"
     property bool isidle: false
     property int a: 0
@@ -43,22 +41,21 @@ Window {
     property real y2_movement: 0.0
     property int right_trig: 0
     property int left_trig: 0
-
-    property int missileRepaint: 0
+    property int smooth_cx: 0
+    property int smooth_cy: 0
+    // --- Endast UI-state (styr utseendet på nya visuella element, ingen ny funktion) ---
     property int selectedMissile: 1
     property bool mLeft: true
     property bool mMid: true
     property bool mRight: true
-
     property bool everOperative: false
-
     Timer {
         interval: 80
         running: true
         repeat: true
         onTriggered: {
             var xhr = new XMLHttpRequest()
-            xhr.open("GET", "http://192.168.1.146:8080/status")
+            xhr.open("GET", "http://192.168.4.200:8080/status")
             xhr.onreadystatechange = function() {
                 if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
                     var data = JSON.parse(xhr.responseText)
@@ -70,35 +67,39 @@ Window {
             xhr.send()
         }
     }
-
     TcpClient {
         id: tcpGraph
+        property string network: ""
         onConnected: console.log("Connected to server")
-        onMessageRecieved: socketValue = parseInt(msg)
+        onMessageRecieved: {//socketValue = parseFloat(msg)
+            network += msg
+            if(network.indexOf("\n") !== -1){
+                let cleanValue = network.replace("\r","").replace("\n","")
+                socketValue = parseFloat(cleanValue)
+                network = ""
+            }
+            console.log("message" +msg)
+        console.log(socketValue)
+        }
     }
     TcpClient {
         id: tcpButtons;
         onConnected: console.log("Buttons connected")
         onMessageRecieved: {
             canisters = msg
-            var vals = msg.toString().match(/true|false/gi)
-            if (vals && vals.length >= 3) {
-                canister1 = (vals[0].toLowerCase() === "true")
-                canister2 = (vals[1].toLowerCase() === "true")
-                canister3 = (vals[2].toLowerCase() === "true")
-            }
+            canister1 = canisters[0]
+            canister2 = canisters[1]
+            canister3 = canisters[2]
             console.log(canisters)
         }
     }
     TcpClient { id: tcpJoystick; onConnected: console.log("Joysticks connected") }
-
     Timer {
         interval: 50
         running: true
         repeat: true
         onTriggered: tcpGraph.sendMessage("READ\n")
     }
-
     component Graph: Item {
         id: graphRoot
         property color lineColor: "#AFC7FF"
@@ -106,7 +107,6 @@ Window {
         property real lineWidth: 2.5
         property int updateInterval: 40
         property double dataValue: 0
-
         Rectangle {
             anchors.fill: parent
             color: "#0B0E14"
@@ -114,7 +114,6 @@ Window {
             border.width: 2
             radius: 4
         }
-
         Canvas {
             anchors.fill: parent
             opacity: 0.3
@@ -126,16 +125,15 @@ Window {
                 for (var y = 0; y < height; y += 30) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
             }
         }
-
         property var points: [Qt.point(0, height/2)]
-
         Timer {
             interval: graphRoot.updateInterval
             running: true
             repeat: true
             onTriggered: {
                 var p = graphRoot.points.slice()
-                var newY = height/2 + (graphRoot.dataValue * (height * 0.4) - height * 0.2)
+                var newY = height/2 - (graphRoot.dataValue * (height * 0.4) - height * 0.2)
+                //console.log("Graph value: " + graphRoot.dataValue)
                 newY = Math.max(10, Math.min(height - 10, newY))
                 p.push(Qt.point(p.length * 3, newY))
                 while (p.length > 0 && p[p.length-1].x > width + 10) {
@@ -145,7 +143,6 @@ Window {
                 graphRoot.points = p
             }
         }
-
         Shape {
             anchors.fill: parent
             antialiasing: true
@@ -160,8 +157,7 @@ Window {
             }
         }
     }
-
-    /* ---------------- MISSILE ICON ---------------- */
+    /* ---------------- MISSILE ICON (tillagt från nya UI:n) ---------------- */
     component Missile: Item {
         id: missileRoot
         property bool loaded: true
@@ -171,7 +167,6 @@ Window {
         property int repaintKey: 0
         width: 26
         height: 72
-
         Rectangle {
             anchors.centerIn: parent
             width: parent.width + 18
@@ -189,7 +184,6 @@ Window {
                 NumberAnimation { from: 1.0; to: 0.5; duration: 600 }
             }
         }
-
         Canvas {
             id: glow
             anchors.centerIn: parent
@@ -218,7 +212,6 @@ Window {
                 NumberAnimation { from: 1.0; to: 0.4; duration: 800 }
             }
         }
-
         Canvas {
             id: missileBody
             anchors.fill: parent
@@ -255,7 +248,6 @@ Window {
             }
         }
     }
-
     /* ---------------- INTRO ---------------- */
     Rectangle {
         id: fadeoutintro
@@ -264,14 +256,12 @@ Window {
         opacity: 1.0
         z: 10
     }
-
     Rectangle {
         id: hudIntro
         anchors.fill: parent
         color: "#0B0E14"
         opacity: 1.0
         z: 11
-
         Canvas {
             anchors.fill: parent
             onPaint: {
@@ -282,7 +272,6 @@ Window {
                 for (var y = 0; y < height; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
             }
         }
-
         Image {
             id: saabLogo
             source: "Saab(1).jpg"
@@ -292,7 +281,7 @@ Window {
             opacity: 0.9
             fillMode: Image.PreserveAspectFit
         }
-
+        // Connection lampa på intro - blinkar gult i connect state (req 2211)
         Rectangle {
             id: intro_lamp
             width: 24; height: 24; radius: 12
@@ -300,7 +289,6 @@ Window {
             anchors.bottom: intro_text.top
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.bottomMargin: 15
-
             SequentialAnimation on opacity {
                 loops: Animation.Infinite
                 running: intro_lamp.color === "yellow"
@@ -308,7 +296,6 @@ Window {
                 NumberAnimation { from: 1.0; to: 0.4; duration: 600 }
             }
         }
-
         Text {
             id: intro_text
             text: "PRESS ANY BUTTON TO START"
@@ -325,8 +312,7 @@ Window {
                 NumberAnimation { from: 1.0; to: 0.2; duration: 900 }
             }
         }
-
-        // Quit-knapp alltid synlig på intro-skärmen
+        // Quit-knapp alltid synlig på intro-skärmen (tillagt från nya UI:n)
         Button {
             id: introQuit
             text: "Quit"
@@ -352,7 +338,6 @@ Window {
             }
             onClicked: window.close()
         }
-
         TcpClient {
             id: client
             onConnected: {
@@ -363,10 +348,12 @@ Window {
                 fadeOutAnimation2.start()
                 fadeOutHUD.start()
                 fadeInAnimation2.start()
-                status = "operative"
+                status = "Operative"
+                // Operative state: solid Green (req 2221)
                 status_light.color = "green"
                 client.sendMessage(status)
                 is_idle_time.start()
+                moved_timer.start()
             }
             onErrorOccurred: {
                 if(status != "Intro"){
@@ -377,10 +364,8 @@ Window {
             }
         }
     }
-
     /* ---------------- MAIN UI ---------------- */
     Rectangle { anchors.fill: parent; color: "#0B0E14" }
-
     Canvas {
         anchors.fill: parent
         opacity: 0.18
@@ -392,7 +377,29 @@ Window {
             for (var y = 0; y < height; y += 80) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
         }
     }
-
+    // Graferna längst ner
+    Row {
+        anchors.bottom: parent.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.margins: 10
+        anchors.bottomMargin: 10
+        spacing: 10
+        height: 150
+        Graph {
+            width: parent.width / 2 - 5
+            height: parent.height
+            lineColor: "#AFC7FF"
+            dataValue: window.socketValue
+        }
+        Graph {
+            width: parent.width / 2 - 5
+            height: parent.height
+            lineColor: "#FF5555"
+            dataValue: window.socketValue2
+        }
+    }
+    // Vänster kolumn - States
     Rectangle {
         id: statesPanel
         anchors.left: parent.left
@@ -406,19 +413,23 @@ Window {
         border.color: "#3A4A66"
         border.width: 2
         radius: 4
-
+        // States + LED centrerade i panelen
         Column {
             anchors.centerIn: parent
             spacing: 10
-
+            // RGB Status Indicator LED (req 2211/2221/2231)
+            // - Connect state:   flashing Yellow
+            // - Operative state: solid Green
+            // - Idle state:      solid White
             Rectangle {
                 id: status_light
                 width: 22; height: 22; radius: 11
                 color: "yellow"
                 anchors.horizontalCenter: parent.horizontalCenter
+                // Glow-effekt
                 layer.enabled: true
                 layer.effect: null
-
+                // Flashing Yellow animation - only active in Connect state (req 2211)
                 SequentialAnimation on opacity {
                     id: connectBlink
                     loops: Animation.Infinite
@@ -427,23 +438,23 @@ Window {
                     NumberAnimation { from: 1.0; to: 0.4; duration: 600 }
                 }
             }
-
+            // CONNECT STATE
             Rectangle {
                 width: 240; height: 50; radius: 4
                 anchors.horizontalCenter: parent.horizontalCenter
-                color: status === "operative" ? "#0D2B1F" : "transparent"
-                border.color: status === "operative" ? "#00FF88" : "#2A3A55"
+                color: status === "Operative" ? "#0D2B1F" : "transparent"
+                border.color: status === "Operative" ? "#00FF88" : "#2A3A55"
                 border.width: 2
                 Text {
                     text: "CONNECT STATE"
-                    color: status === "operative" ? "#00FF88" : "#6A7A99"
+                    color: status === "Operative" ? "#00FF88" : "#6A7A99"
                     font.pixelSize: 17
                     font.bold: true
                     font.family: "Eurostile"
                     anchors.centerIn: parent
                 }
             }
-
+            // IDLE STATE
             Rectangle {
                 width: 240; height: 50; radius: 4
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -459,16 +470,16 @@ Window {
                     anchors.centerIn: parent
                 }
             }
-
+            // OPERATIVE STATE
             Rectangle {
                 width: 240; height: 50; radius: 4
                 anchors.horizontalCenter: parent.horizontalCenter
-                color: (status === "operative" || status === "Operative") && !window.isidle ? "#131B2E" : "transparent"
-                border.color: (status === "operative" || status === "Operative") && !window.isidle ? "#AFC7FF" : "#2A3A55"
+                color: (status === "Operative" || status === "Operative") && !window.isidle ? "#131B2E" : "transparent"
+                border.color: (status === "Operative" || status === "Operative") && !window.isidle ? "#AFC7FF" : "#2A3A55"
                 border.width: 2
                 Text {
                     text: "OPERATIVE STATE"
-                    color: (status === "operative" || status === "Operative") && !window.isidle ? "#AFC7FF" : "#6A7A99"
+                    color: (status === "Operative" || status === "Operative") && !window.isidle ? "#AFC7FF" : "#6A7A99"
                     font.pixelSize: 17
                     font.bold: true
                     font.family: "Eurostile"
@@ -477,7 +488,7 @@ Window {
             }
         }
     }
-
+    // Höger kolumn - Speed
     Rectangle {
         id: speedPanel
         anchors.right: parent.right
@@ -491,11 +502,10 @@ Window {
         border.color: "#3A4A66"
         border.width: 2
         radius: 4
-
         Column {
             anchors.centerIn: parent
             spacing: 20
-
+            // Titel
             Text {
                 text: "SPEED"
                 font.pixelSize: 13
@@ -506,7 +516,7 @@ Window {
                 anchors.horizontalCenter: parent.horizontalCenter
                 font.letterSpacing: 3
             }
-
+            // Stor siffra
             Text {
                 text: window.speed
                 font.pixelSize: 80
@@ -515,7 +525,7 @@ Window {
                 color: "#D6E1FF"
                 anchors.horizontalCenter: parent.horizontalCenter
             }
-
+            // Enhet
             Text {
                 text: "km/h"
                 font.pixelSize: 16
@@ -526,14 +536,13 @@ Window {
                 anchors.horizontalCenter: parent.horizontalCenter
                 font.letterSpacing: 2
             }
-
+            // Progressbar
             Rectangle {
                 width: 220; height: 6; radius: 3
                 anchors.horizontalCenter: parent.horizontalCenter
                 color: "#0B0E14"
                 border.color: "#2A3A55"
                 border.width: 1
-
                 Rectangle {
                     height: parent.height
                     width: Math.min(parent.width, window.speed / 120 * parent.width)
@@ -547,7 +556,7 @@ Window {
             }
         }
     }
-
+    // Mitten - Turretview
     Item {
         id: turretItem
         anchors.left: statesPanel.right
@@ -557,7 +566,6 @@ Window {
         anchors.margins: 10
         property bool showFirst: true
         property bool cameraReady: false
-
         Rectangle {
             anchors.fill: parent
             color: "#1A2333"
@@ -565,51 +573,38 @@ Window {
             border.width: window.lockedOn ? 3 : 2
             radius: 4
         }
-
         Image {
             id: feed1
             anchors.fill: parent
-            fillMode: Image.PreserveAspectCrop
+            fillMode: Image.Stretch
             cache: false
             visible: turretItem.showFirst
             onStatusChanged: {
                 if (status === Image.Ready) {
                     turretItem.showFirst = true
                     turretItem.cameraReady = true
-                    feedTimer.waitingForLoad = false
-                } else if (status === Image.Error) {
-                    feedTimer.waitingForLoad = false
                 }
             }
         }
-
         Image {
             id: feed2
             anchors.fill: parent
-            fillMode: Image.PreserveAspectCrop
+            fillMode: Image.Stretch
             cache: false
             visible: !turretItem.showFirst
             onStatusChanged: {
                 if (status === Image.Ready) {
                     turretItem.showFirst = false
                     turretItem.cameraReady = true
-                    feedTimer.waitingForLoad = false
-                } else if (status === Image.Error) {
-                    feedTimer.waitingForLoad = false
                 }
             }
         }
-
         Timer {
-            id: feedTimer
-            interval: 33
+            interval: 150
             running: true
             repeat: true
-            property bool waitingForLoad: false
             onTriggered: {
-                if (feedTimer.waitingForLoad) return
-                feedTimer.waitingForLoad = true
-                var url = "http://192.168.1.146:8080/video_frame?t=" + Date.now()
+                var url = "http://192.168.4.200:8080/video_frame?t=" + Date.now()
                 if (turretItem.showFirst) {
                     feed2.source = url
                 } else {
@@ -617,7 +612,7 @@ Window {
                 }
             }
         }
-
+        // Laddningsskärm för kameran (tillagt från nya UI:n)
         Rectangle {
             id: cameraLoading
             anchors.fill: parent
@@ -625,7 +620,6 @@ Window {
             color: "#0B0E14"
             visible: !turretItem.cameraReady
             z: 10
-
             Canvas {
                 anchors.fill: parent
                 opacity: 0.18
@@ -637,18 +631,15 @@ Window {
                     for (var y = 0; y < height; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
                 }
             }
-
             Column {
                 anchors.centerIn: parent
                 spacing: 22
-
                 BusyIndicator {
                     running: cameraLoading.visible
                     width: 64
                     height: 64
                     anchors.horizontalCenter: parent.horizontalCenter
                 }
-
                 Text {
                     text: "LOADING CAMERA"
                     color: "#AFC7FF"
@@ -666,7 +657,6 @@ Window {
                 }
             }
         }
-
         Rectangle {
             visible: window.lockedOn
             anchors.top: parent.top
@@ -691,7 +681,30 @@ Window {
                 }
             }
         }
-
+        Canvas {
+            anchors.fill: parent
+            visible: window.targetX > 0
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.clearRect(0, 0, width, height)
+                var sx = window.targetX / 640 * width
+                var sy = window.targetY / 480 * height
+                ctx.strokeStyle = window.lockedOn ? "#FF5555" : "#00FFFF"
+                ctx.lineWidth = 2
+                ctx.beginPath(); ctx.moveTo(sx - 20, sy); ctx.lineTo(sx + 20, sy); ctx.stroke()
+                ctx.beginPath(); ctx.moveTo(sx, sy - 20); ctx.lineTo(sx, sy + 20); ctx.stroke()
+                ctx.beginPath()
+                ctx.arc(sx, sy, 15, 0, Math.PI * 2)
+                ctx.stroke()
+            }
+            Connections {
+                target: window
+                function onTargetXChanged() { parent.requestPaint() }
+                function onTargetYChanged() { parent.requestPaint() }
+                function onLockedOnChanged() { parent.requestPaint() }
+            }
+        }
+        // Missilrad (tillagt från nya UI:n)
         Row {
             id: missileRow
             anchors.bottom: parent.bottom
@@ -700,12 +713,11 @@ Window {
             anchors.leftMargin: 24
             spacing: 28
             z: 5
-
-            Missile { loaded: window.mLeft;  selected: window.selectedMissile === 0; repaintKey: window.missileRepaint }
-            Missile { loaded: window.mMid;   selected: window.selectedMissile === 1; repaintKey: window.missileRepaint }
-            Missile { loaded: window.mRight; selected: window.selectedMissile === 2; repaintKey: window.missileRepaint }
+            Missile { loaded: window.mLeft;  selected: window.selectedMissile === 0 }
+            Missile { loaded: window.mMid;   selected: window.selectedMissile === 1 }
+            Missile { loaded: window.mRight; selected: window.selectedMissile === 2 }
         }
-
+        // Radar-ruta (tillagt från nya UI:n)
         Rectangle {
             id: radarBox
             width: 96
@@ -719,7 +731,6 @@ Window {
             anchors.bottom: parent.bottom
             anchors.bottomMargin: 16
             z: 5
-
             Text {
                 text: "RADAR"
                 anchors.bottom: parent.top
@@ -731,7 +742,6 @@ Window {
                 font.family: "Eurostile"
                 font.letterSpacing: 2
             }
-
             Canvas {
                 id: radarCanvas
                 anchors.fill: parent
@@ -759,50 +769,44 @@ Window {
                     function onTargetXChanged() { radarCanvas.requestPaint() }
                     function onTargetYChanged() { radarCanvas.requestPaint() }
                     function onLockedOnChanged() { radarCanvas.requestPaint() }
-                    function onMissileRepaintChanged() { radarCanvas.requestPaint() }
                 }
             }
         }
     }
-
     SdlHelper {
         id: sdl
         property bool locked: false
-        property bool l1Latched: false
         onButtonPressed: {
             reset_idle()
-
             if (status == "Intro") {
                 if (locked) return
                 locked = true
+                // Connect state: flashing Yellow (req 2211)
                 intro_lamp.color = "yellow"
                 intro_text.text = "Trying to Connect"
-                client.connectToHost("192.168.1.146", 2222)
-                tcpGraph.connectToHost("192.168.1.146", 2223)
-                tcpButtons.connectToHost("192.168.1.146", 2224)
-                tcpJoystick.connectToHost("192.168.1.146", 2225)
+                client.connectToHost("192.168.4.1", 2222)
+                tcpGraph.connectToHost("192.168.4.1", 2223)
+                tcpButtons.connectToHost("192.168.4.1", 2224)
+                tcpJoystick.connectToHost("192.168.4.1", 2225)
+                status = "Operative"
+                client.sendMessage(status)
                 lockTimer.start()
+                if(status != "error")
+                {
+                    status = "Operative"
+                    client.sendMessage(status)
+                }
             }
             else if(status !== "Intro") {
                 switch(button) {
                 case 0: a = 1; break
-                case 1: b = 1; window.selectedMissile = Math.min(2, window.selectedMissile + 1); break
-                case 2: x = 1; window.selectedMissile = Math.max(0, window.selectedMissile - 1); break
+                case 1: b = 1; break
+                case 2: x = 1; break
                 case 3: y = 1; break
-                case 9:
-                    if (sdl.l1Latched) return
-                    sdl.l1Latched = true
-                    reloadSelected()
-                    shoulder_l = 1
-                    sendButtons()
-                    shoulder_l = 0
-                    break
-                case 10:
-                    shoulder_r = 1
-                    fireSelected()
-                    break
+                case 9: shoulder_l = 1; break
+                case 10: shoulder_r = 1; break
                 }
-                sendButtons()
+                tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
             }
         }
         onButtonReleased: {
@@ -812,37 +816,39 @@ Window {
                 case 1: b = 0; break
                 case 2: x = 0; break
                 case 3: y = 0; break
-                case 9: shoulder_l = 0; sdl.l1Latched = false; break
+                case 9: shoulder_l = 0; break
                 case 10: shoulder_r = 0; break
                 }
-                sendButtons()
+                tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
             }
         }
         onAxisMoved: {
+            //moved_timer.restart()
             if (status !== "Intro") {
                 status = "Operative"
                 switch (axis) {
-                case 0: x1_movement = Math.abs(value) > 2000 ? value : 0; break
-                case 1: y1_movement = Math.abs(value) > 2000 ? value : 0; break
-                case 2: x2_movement = Math.abs(value) > 2000 ? value : 0; break
-                case 3: y2_movement = Math.abs(value) > 2000 ? value : 0; break
+                case 0: x1_movement = Math.abs(value) > 15000 ? value : 0; break
+                case 1: y1_movement = Math.abs(value) > 15000 ? value : 0; break
+                case 2: x2_movement = Math.abs(value) > 15000 ? value : 0; break
+                case 3: y2_movement = Math.abs(value) > 15000 ? value : 0; break
                 }
                 if (Math.abs(value) > 2000) reset_idle()
+                console.log(x1_movement+ x2_movement)
+                //console.log("axis moved")
                 tcpJoystick.sendMessage(x1_movement + "," + y1_movement + "," + x2_movement + "," + y2_movement + "," + right_trig + "," + left_trig)
+                //moved_timer.start()
             }
         }
     }
-
     Component.onCompleted: sdl.initGamepad()
-
     Item {
         id: graphRow
         anchors.bottom: parent.bottom
         anchors.left: parent.left
         anchors.right: parent.right
-        height: 0
+        height: 170
     }
-
+    // Toppmeny (tillagt från nya UI:n) - ersätter de fristående Quit/Tutorial-knapparna
     Rectangle {
         id: topBar
         z: 12
@@ -854,7 +860,6 @@ Window {
         color: "#1A2333"
         border.color: "#3A4A66"
         border.width: 2
-
         Rectangle {
             anchors.left: parent.left
             anchors.right: parent.right
@@ -863,7 +868,6 @@ Window {
             color: "#00CFFF"
             opacity: 0.55
         }
-
         Button {
             id: quit
             text: "Quit"
@@ -887,15 +891,16 @@ Window {
                 color: "white"
                 font: quit.font
             }
-            onClicked: window.close()
+            onClicked: {
+                client.sendMessage("connect")
+                window.close()
+            }
         }
-
         Row {
             anchors.right: parent.right
             anchors.rightMargin: 16
             anchors.verticalCenter: parent.verticalCenter
             spacing: 16
-
             Button {
                 id: debugButton
                 text: "DEBUG"
@@ -920,7 +925,6 @@ Window {
                 }
                 onClicked: debugScreen.visible = !debugScreen.visible
             }
-
             Button {
                 id: tutorialButton
                 text: "TUTORIAL"
@@ -947,15 +951,13 @@ Window {
             }
         }
     }
-
-    /* ---------------- DEBUG SCREEN ---------------- */
+    /* ---------------- DEBUG SCREEN (tillagt från nya UI:n) ---------------- */
     Rectangle {
         id: debugScreen
         anchors.fill: parent
         visible: false
         color: "#0B0E14"
         z: 21
-
         Canvas {
             anchors.fill: parent
             opacity: 0.18
@@ -967,7 +969,6 @@ Window {
                 for (var y = 0; y < height; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
             }
         }
-
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: parent.top
@@ -979,11 +980,9 @@ Window {
             font.letterSpacing: 6
             color: "#AFC7FF"
         }
-
         Row {
             anchors.centerIn: parent
             spacing: 40
-
             Column {
                 spacing: 12
                 Text {
@@ -1002,7 +1001,6 @@ Window {
                     dataValue: window.socketValue
                 }
             }
-
             Column {
                 spacing: 12
                 Text {
@@ -1022,7 +1020,6 @@ Window {
                 }
             }
         }
-
         Button {
             id: debugQuit
             text: "Quit"
@@ -1046,7 +1043,6 @@ Window {
             }
             onClicked: window.close()
         }
-
         Button {
             id: debugBack
             text: "Tillbaka"
@@ -1071,17 +1067,13 @@ Window {
             onClicked: debugScreen.visible = false
         }
     }
-
-    /* ---------------- TUTORIAL SCREEN ---------------- */
+    /* ---------------- TUTORIAL SCREEN (tillagt från nya UI:n, samma innehåll som i din kod) ---------------- */
     Rectangle {
         id: tutorial
         anchors.fill: parent
         visible: false
         color: "#0B0E14"
         z: 20
-
-        onVisibleChanged: if (!visible) window.missileRepaint++
-
         Canvas {
             anchors.fill: parent
             opacity: 0.18
@@ -1093,7 +1085,6 @@ Window {
                 for (var y = 0; y < height; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
             }
         }
-
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: parent.top
@@ -1105,19 +1096,13 @@ Window {
             font.letterSpacing: 6
             color: "#AFC7FF"
         }
-
         Column {
             anchors.centerIn: parent
             spacing: 24
-
-            Text { text: "Vänster Joystick = Styrning"; font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
-            Text { text: "Höger joystick = Robot";      font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
-            Text { text: "R1 = Skjuta";                 font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
-            Text { text: "L1 = ladda om";               font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
-            Text { text: "X = Vänster Missilstyrnings"; font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
-            Text { text: "B = Höger missilstyrning";    font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
+            Text { text: "Left Joystick  =  Movement/Steering";        font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
+            Text { text: "Right joystick  =  Turret Control/Movement"; font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
+            Text { text: "R1  =  Shoot";                               font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
         }
-
         Button {
             id: tutorialQuit
             text: "Quit"
@@ -1141,7 +1126,6 @@ Window {
             }
             onClicked: window.close()
         }
-
         Button {
             id: backBtn
             text: "Tillbaka"
@@ -1166,55 +1150,66 @@ Window {
             onClicked: tutorial.visible = false
         }
     }
-
     Timer {
         id: lockTimer
         interval: 1500
         repeat: false
         onTriggered: sdl.locked = false
     }
-
+    // Idle timer: 5 minuter = 300 000 ms (req 2231)
     Timer {
         id: is_idle_time
-        interval: 300000
+        interval: 3000
         repeat: false
         onTriggered: {
             if (status != "Intro" && status != "error") {
+                status = "idle"
                 window.isidle = true
+                //client.sendMessage(status)
+                // Idle state: solid White (req 2231)
                 status_light.color = "white"
+                idle.start()
             }
         }
     }
-
-    function sendButtons() {
-        tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r + "," + (3 - window.selectedMissile))
+    Timer{
+        id: idle
+        interval: 100
+        repeat:true
+        onTriggered: {
+            client.sendMessage("idle")
+        }
     }
-
-    function fireSelected() {
-        if (window.selectedMissile === 0) window.mLeft = false
-        else if (window.selectedMissile === 1) window.mMid = false
-        else window.mRight = false
+    Timer{
+        id: moved_timer
+        interval: 1
+        repeat:true
+        onTriggered: {
+            /*x1_movement = 0
+            y1_movement = 0
+            x2_movement = 0
+            y2_movement = 0
+            right_trig = 0
+            left_trig = 0*/
+            console.log("Joystick unmoved")
+            tcpJoystick.sendMessage(x1_movement + "," + y1_movement + "," + x2_movement + "," + y2_movement + "," + right_trig + "," + left_trig)
+        }
     }
-
-    function reloadSelected() {
-        if (window.selectedMissile === 0) window.mLeft = true
-        else if (window.selectedMissile === 1) window.mMid = true
-        else window.mRight = true
-    }
-
     function reset_idle() {
         window.isidle = false
         if (status != "Intro" && status != "error") {
+            // Operative state: solid Green (req 2221)
             status_light.color = "green"
         } else if (status == "error") {
             status_light.color = "red"
         } else {
+            // Connect state: flashing Yellow (req 2211) - animation driven by color binding
             status_light.color = "yellow"
         }
         client.sendMessage(status)
+        idle.stop()
         is_idle_time.restart()
     }
-
     PropertyAnimation { id: fadeOutAnimation;  target: fadeoutintro; property: "opacity"; to: 0.0; duration: 1000 }
     PropertyAnimation { id: fadeOutAnimation2; target: saabLogo;     property: "opacity"; to: 0.0; duration: 1000 }
     PropertyAnimation { id: fadeOutHUD;        target: hudIntro;     property: "opacity"; to: 0.0; duration: 1200 }
