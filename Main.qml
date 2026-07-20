@@ -23,8 +23,8 @@ Window {
     property int targetX: 0
     property int targetY: 0
     property int speed: 0
-    property double socketValue: 0
-    property double socketValue2: 0
+    property real socketValue: 0.0
+    property real socketValue2: 0.0
     property string status: "Intro"
     property bool isidle: false
     property int a: 0
@@ -43,6 +43,9 @@ Window {
     property real y2_movement: 0.0
     property int right_trig: 0
     property int left_trig: 0
+    property int smooth_cx: 0
+    property int smooth_cy: 0
+
 
     Timer {
         interval: 80
@@ -50,7 +53,7 @@ Window {
         repeat: true
         onTriggered: {
             var xhr = new XMLHttpRequest()
-            xhr.open("GET", "http://192.168.1.200:8080/status")
+            xhr.open("GET", "http://192.168.4.200:8080/status")
             xhr.onreadystatechange = function() {
                 if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
                     var data = JSON.parse(xhr.responseText)
@@ -65,9 +68,24 @@ Window {
 
     TcpClient {
         id: tcpGraph
+        property string network: ""
         onConnected: console.log("Connected to server")
-        onMessageRecieved: socketValue = parseInt(msg)
+        onMessageRecieved: {//socketValue = parseFloat(msg)
+            network += msg
+            if(network.indexOf("\n") !== -1){
+                let cleanValue = network.replace("\r","").replace("\n","")
+                socketValue = parseFloat(cleanValue)
+
+                network = ""
+            }
+
+
+            console.log("message" +msg)
+        console.log(socketValue)
+        }
+
     }
+
     TcpClient {
         id: tcpButtons;
         onConnected: console.log("Buttons connected")
@@ -127,8 +145,10 @@ Window {
             repeat: true
             onTriggered: {
                 var p = graphRoot.points.slice()
-                var newY = height/2 + (graphRoot.dataValue * (height * 0.4) - height * 0.2)
+                var newY = height/2 - (graphRoot.dataValue * (height * 0.4) - height * 0.2)
+                //console.log("Graph value: " + graphRoot.dataValue)
                 newY = Math.max(10, Math.min(height - 10, newY))
+
                 p.push(Qt.point(p.length * 3, newY))
                 while (p.length > 0 && p[p.length-1].x > width + 10) {
                     for (var i = 0; i < p.length; i++) p[i].x -= 3
@@ -233,11 +253,15 @@ Window {
                 fadeOutAnimation2.start()
                 fadeOutHUD.start()
                 fadeInAnimation2.start()
-                status = "operative"
+                status = "Operative"
                 // Operative state: solid Green (req 2221)
                 status_light.color = "green"
                 client.sendMessage(status)
                 is_idle_time.start()
+
+
+
+                moved_timer.start()
             }
             onErrorOccurred: {
                 if(status != "Intro"){
@@ -339,12 +363,12 @@ Window {
             Rectangle {
                 width: 240; height: 50; radius: 4
                 anchors.horizontalCenter: parent.horizontalCenter
-                color: status === "operative" ? "#0D2B1F" : "transparent"
-                border.color: status === "operative" ? "#00FF88" : "#2A3A55"
+                color: status === "Operative" ? "#0D2B1F" : "transparent"
+                border.color: status === "Operative" ? "#00FF88" : "#2A3A55"
                 border.width: 2
                 Text {
                     text: "CONNECT STATE"
-                    color: status === "operative" ? "#00FF88" : "#6A7A99"
+                    color: status === "Operative" ? "#00FF88" : "#6A7A99"
                     font.pixelSize: 17
                     font.bold: true
                     font.family: "Eurostile"
@@ -373,12 +397,12 @@ Window {
             Rectangle {
                 width: 240; height: 50; radius: 4
                 anchors.horizontalCenter: parent.horizontalCenter
-                color: (status === "operative" || status === "Operative") && !window.isidle ? "#131B2E" : "transparent"
-                border.color: (status === "operative" || status === "Operative") && !window.isidle ? "#AFC7FF" : "#2A3A55"
+                color: (status === "Operative" || status === "Operative") && !window.isidle ? "#131B2E" : "transparent"
+                border.color: (status === "Operative" || status === "Operative") && !window.isidle ? "#AFC7FF" : "#2A3A55"
                 border.width: 2
                 Text {
                     text: "OPERATIVE STATE"
-                    color: (status === "operative" || status === "Operative") && !window.isidle ? "#AFC7FF" : "#6A7A99"
+                    color: (status === "Operative" || status === "Operative") && !window.isidle ? "#AFC7FF" : "#6A7A99"
                     font.pixelSize: 17
                     font.bold: true
                     font.family: "Eurostile"
@@ -508,7 +532,7 @@ Window {
             running: true
             repeat: true
             onTriggered: {
-                var url = "http://192.168.1.200:8080/video_frame?t=" + Date.now()
+                var url = "http://192.168.4.200:8080/video_frame?t=" + Date.now()
                 if (turretItem.showFirst) {
                     feed2.source = url
                 } else {
@@ -579,11 +603,19 @@ Window {
                 // Connect state: flashing Yellow (req 2211)
                 intro_lamp.color = "yellow"
                 intro_text.text = "Trying to Connect"
-                client.connectToHost("192.168.1.146", 2222)
-                tcpGraph.connectToHost("192.168.1.146", 2223)
-                tcpButtons.connectToHost("192.168.1.146", 2224)
-                tcpJoystick.connectToHost("192.168.1.146", 2225)
+                client.connectToHost("192.168.4.1", 2222)
+                tcpGraph.connectToHost("192.168.4.1", 2223)
+                tcpButtons.connectToHost("192.168.4.1", 2224)
+                tcpJoystick.connectToHost("192.168.4.1", 2225)
+                status = "Operative"
+                client.sendMessage(status)
                 lockTimer.start()
+
+                if(status != "error")
+                {
+                    status = "Operative"
+                    client.sendMessage(status)
+                }
             }
             else if(status !== "Intro") {
                 switch(button) {
@@ -611,19 +643,23 @@ Window {
                 tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
             }
         }
+
         onAxisMoved: {
+            //moved_timer.restart()
             if (status !== "Intro") {
                 status = "Operative"
                 switch (axis) {
-                case 0: x1_movement = Math.abs(value) > 2000 ? value : 0; break
-                case 1: y1_movement = Math.abs(value) > 2000 ? value : 0; break
-                case 2: x2_movement = Math.abs(value) > 2000 ? value : 0; break
-                case 3: y2_movement = Math.abs(value) > 2000 ? value : 0; break
+                case 0: x1_movement = Math.abs(value) > 15000 ? value : 0; break
+                case 1: y1_movement = Math.abs(value) > 15000 ? value : 0; break
+                case 2: x2_movement = Math.abs(value) > 15000 ? value : 0; break
+                case 3: y2_movement = Math.abs(value) > 15000 ? value : 0; break
                 }
                 if (Math.abs(value) > 2000) reset_idle()
-
+                console.log(x1_movement+ x2_movement)
+                //console.log("axis moved")
 
                 tcpJoystick.sendMessage(x1_movement + "," + y1_movement + "," + x2_movement + "," + y2_movement + "," + right_trig + "," + left_trig)
+                //moved_timer.start()
             }
         }
     }
@@ -660,7 +696,10 @@ Window {
             color: "white"
             font: quit.font
         }
-        onClicked: window.close()
+        onClicked: {
+            client.sendMessage("connect")
+            window.close()
+                    }
     }
     Button{
         id: tutorialButton
@@ -738,14 +777,44 @@ Window {
     // Idle timer: 5 minuter = 300 000 ms (req 2231)
     Timer {
         id: is_idle_time
-        interval: 300000
+        interval: 3000
         repeat: false
         onTriggered: {
             if (status != "Intro" && status != "error") {
+                status = "idle"
                 window.isidle = true
+
+                //client.sendMessage(status)
                 // Idle state: solid White (req 2231)
                 status_light.color = "white"
+                idle.start()
             }
+        }
+    }
+    Timer{
+        id: idle
+        interval: 100
+        repeat:true
+        onTriggered: {
+            client.sendMessage("idle")
+        }
+
+    }
+
+
+    Timer{
+        id: moved_timer
+        interval: 1
+        repeat:true
+        onTriggered: {
+            /*x1_movement = 0
+            y1_movement = 0
+            x2_movement = 0
+            y2_movement = 0
+            right_trig = 0
+            left_trig = 0*/
+            console.log("Joystick unmoved")
+            tcpJoystick.sendMessage(x1_movement + "," + y1_movement + "," + x2_movement + "," + y2_movement + "," + right_trig + "," + left_trig)
         }
     }
 
@@ -760,7 +829,9 @@ Window {
             // Connect state: flashing Yellow (req 2211) - animation driven by color binding
             status_light.color = "yellow"
         }
+
         client.sendMessage(status)
+        idle.stop()
         is_idle_time.restart()
     }
 
