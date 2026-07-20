@@ -377,34 +377,12 @@ Window {
             for (var y = 0; y < height; y += 80) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
         }
     }
-    // Graferna längst ner
-    Row {
-        anchors.bottom: parent.bottom
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.margins: 10
-        anchors.bottomMargin: 10
-        spacing: 10
-        height: 150
-        Graph {
-            width: parent.width / 2 - 5
-            height: parent.height
-            lineColor: "#AFC7FF"
-            dataValue: window.socketValue
-        }
-        Graph {
-            width: parent.width / 2 - 5
-            height: parent.height
-            lineColor: "#FF5555"
-            dataValue: window.socketValue2
-        }
-    }
     // Vänster kolumn - States
     Rectangle {
         id: statesPanel
         anchors.left: parent.left
         anchors.top: topBar.bottom
-        anchors.bottom: graphRow.top
+        anchors.bottom: parent.bottom
         anchors.leftMargin: 10
         anchors.topMargin: 10
         anchors.bottomMargin: 10
@@ -493,7 +471,7 @@ Window {
         id: speedPanel
         anchors.right: parent.right
         anchors.top: topBar.bottom
-        anchors.bottom: graphRow.top
+        anchors.bottom: parent.bottom
         anchors.rightMargin: 10
         anchors.topMargin: 10
         anchors.bottomMargin: 10
@@ -562,7 +540,7 @@ Window {
         anchors.left: statesPanel.right
         anchors.right: speedPanel.left
         anchors.top: topBar.bottom
-        anchors.bottom: graphRow.top
+        anchors.bottom: parent.bottom
         anchors.margins: 10
         property bool showFirst: true
         property bool cameraReady: false
@@ -841,13 +819,6 @@ Window {
         }
     }
     Component.onCompleted: sdl.initGamepad()
-    Item {
-        id: graphRow
-        anchors.bottom: parent.bottom
-        anchors.left: parent.left
-        anchors.right: parent.right
-        height: 170
-    }
     // Toppmeny (tillagt från nya UI:n) - ersätter de fristående Quit/Tutorial-knapparna
     Rectangle {
         id: topBar
@@ -905,7 +876,7 @@ Window {
                 id: debugButton
                 text: "DEBUG"
                 width: 220
-                height: 58
+                height: 80
                 font.pixelSize: 22
                 font.bold: true
                 font.family: "Eurostile"
@@ -980,43 +951,37 @@ Window {
             font.letterSpacing: 6
             color: "#AFC7FF"
         }
-        Row {
+        Grid {
             anchors.centerIn: parent
-            spacing: 40
-            Column {
-                spacing: 12
-                Text {
-                    text: "DEBUG 1"
-                    font.pixelSize: 18
-                    font.bold: true
-                    font.family: "Eurostile"
-                    font.letterSpacing: 2
-                    color: "#AFC7FF"
-                    anchors.horizontalCenter: parent.horizontalCenter
-                }
-                Graph {
-                    width: 520
-                    height: 340
-                    lineColor: "#AFC7FF"
-                    dataValue: window.socketValue
-                }
-            }
-            Column {
-                spacing: 12
-                Text {
-                    text: "DEBUG 2"
-                    font.pixelSize: 18
-                    font.bold: true
-                    font.family: "Eurostile"
-                    font.letterSpacing: 2
-                    color: "#FF5555"
-                    anchors.horizontalCenter: parent.horizontalCenter
-                }
-                Graph {
-                    width: 520
-                    height: 340
-                    lineColor: "#FF5555"
-                    dataValue: window.socketValue2
+            anchors.verticalCenterOffset: 20
+            columns: 3
+            spacing: 24
+            Repeater {
+                model: [
+                    { label: "DEBUG 1", color: "#AFC7FF" },
+                    { label: "DEBUG 2", color: "#FF5555" },
+                    { label: "DEBUG 3", color: "#00FF88" },
+                    { label: "DEBUG 4", color: "#FFCC00" },
+                    { label: "DEBUG 5", color: "#FF9E3D" },
+                    { label: "DEBUG 6", color: "#B388FF" }
+                ]
+                delegate: Column {
+                    spacing: 12
+                    Text {
+                        text: modelData.label
+                        font.pixelSize: 16
+                        font.bold: true
+                        font.family: "Eurostile"
+                        font.letterSpacing: 2
+                        color: modelData.color
+                        anchors.horizontalCenter: parent.horizontalCenter
+                    }
+                    Graph {
+                        width: 380
+                        height: 220
+                        lineColor: modelData.color
+                        dataValue: index % 2 === 0 ? window.socketValue : window.socketValue2
+                    }
                 }
             }
         }
