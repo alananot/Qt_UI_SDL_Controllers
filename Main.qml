@@ -5,7 +5,6 @@ import QtQuick.Window
 import QtQml
 import SDL 1.0
 import Networking 1.0
-
 Window {
     id: window
     width: 1280
@@ -14,7 +13,6 @@ Window {
     visibility: Window.FullScreen
     title: "Saab System UI"
     color: "#0B0E14"
-
     property bool lockedOn: false
     property var canisters: []
     property bool canister1: false
@@ -45,8 +43,12 @@ Window {
     property int left_trig: 0
     property int smooth_cx: 0
     property int smooth_cy: 0
-
-
+    // --- Endast UI-state (styr utseendet på nya visuella element, ingen ny funktion) ---
+    property int selectedMissile: 1
+    property bool mLeft: true
+    property bool mMid: true
+    property bool mRight: true
+    property bool everOperative: false
     Timer {
         interval: 80
         running: true
@@ -65,7 +67,6 @@ Window {
             xhr.send()
         }
     }
-
     TcpClient {
         id: tcpGraph
         property string network: ""
@@ -75,17 +76,12 @@ Window {
             if(network.indexOf("\n") !== -1){
                 let cleanValue = network.replace("\r","").replace("\n","")
                 socketValue = parseFloat(cleanValue)
-
                 network = ""
             }
-
-
             console.log("message" +msg)
         console.log(socketValue)
         }
-
     }
-
     TcpClient {
         id: tcpButtons;
         onConnected: console.log("Buttons connected")
@@ -96,19 +92,14 @@ Window {
             canister3 = canisters[2]
             console.log(canisters)
         }
-
-
-
     }
     TcpClient { id: tcpJoystick; onConnected: console.log("Joysticks connected") }
-
     Timer {
         interval: 50
         running: true
         repeat: true
         onTriggered: tcpGraph.sendMessage("READ\n")
     }
-
     component Graph: Item {
         id: graphRoot
         property color lineColor: "#AFC7FF"
@@ -116,7 +107,6 @@ Window {
         property real lineWidth: 2.5
         property int updateInterval: 40
         property double dataValue: 0
-
         Rectangle {
             anchors.fill: parent
             color: "#0B0E14"
@@ -124,7 +114,6 @@ Window {
             border.width: 2
             radius: 4
         }
-
         Canvas {
             anchors.fill: parent
             opacity: 0.3
@@ -136,9 +125,7 @@ Window {
                 for (var y = 0; y < height; y += 30) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
             }
         }
-
         property var points: [Qt.point(0, height/2)]
-
         Timer {
             interval: graphRoot.updateInterval
             running: true
@@ -148,7 +135,6 @@ Window {
                 var newY = height/2 - (graphRoot.dataValue * (height * 0.4) - height * 0.2)
                 //console.log("Graph value: " + graphRoot.dataValue)
                 newY = Math.max(10, Math.min(height - 10, newY))
-
                 p.push(Qt.point(p.length * 3, newY))
                 while (p.length > 0 && p[p.length-1].x > width + 10) {
                     for (var i = 0; i < p.length; i++) p[i].x -= 3
@@ -157,7 +143,6 @@ Window {
                 graphRoot.points = p
             }
         }
-
         Shape {
             anchors.fill: parent
             antialiasing: true
@@ -172,7 +157,97 @@ Window {
             }
         }
     }
-
+    /* ---------------- MISSILE ICON (tillagt från nya UI:n) ---------------- */
+    component Missile: Item {
+        id: missileRoot
+        property bool loaded: true
+        property bool selected: false
+        property color loadedColor: "#FF3B3B"
+        property color spentColor: "#FFFFFF"
+        property int repaintKey: 0
+        width: 26
+        height: 72
+        Rectangle {
+            anchors.centerIn: parent
+            width: parent.width + 18
+            height: parent.height + 18
+            radius: 6
+            color: "transparent"
+            border.color: "#00E5FF"
+            border.width: 3
+            visible: missileRoot.selected
+            z: 2
+            SequentialAnimation on opacity {
+                running: missileRoot.selected
+                loops: Animation.Infinite
+                NumberAnimation { from: 0.5; to: 1.0; duration: 600 }
+                NumberAnimation { from: 1.0; to: 0.5; duration: 600 }
+            }
+        }
+        Canvas {
+            id: glow
+            anchors.centerIn: parent
+            width: parent.width + 26
+            height: parent.height + 26
+            visible: missileRoot.loaded
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.clearRect(0, 0, width, height)
+                var g = ctx.createRadialGradient(width/2, height/2, 2, width/2, height/2, width/2)
+                g.addColorStop(0, "rgba(255,59,59,0.55)")
+                g.addColorStop(1, "rgba(255,59,59,0.0)")
+                ctx.fillStyle = g
+                ctx.fillRect(0, 0, width, height)
+            }
+            onVisibleChanged: if (visible) requestPaint()
+            Component.onCompleted: requestPaint()
+            Connections {
+                target: missileRoot
+                function onRepaintKeyChanged() { if (glow.visible) glow.requestPaint() }
+            }
+            SequentialAnimation on opacity {
+                loops: Animation.Infinite
+                running: missileRoot.loaded
+                NumberAnimation { from: 0.4; to: 1.0; duration: 800 }
+                NumberAnimation { from: 1.0; to: 0.4; duration: 800 }
+            }
+        }
+        Canvas {
+            id: missileBody
+            anchors.fill: parent
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.clearRect(0, 0, width, height)
+                var col = missileRoot.loaded ? missileRoot.loadedColor : missileRoot.spentColor
+                ctx.fillStyle = col
+                var cx = width / 2
+                ctx.beginPath()
+                ctx.moveTo(cx, 2)
+                ctx.lineTo(cx - 7, 20)
+                ctx.lineTo(cx + 7, 20)
+                ctx.closePath()
+                ctx.fill()
+                ctx.fillRect(cx - 7, 20, 14, height - 40)
+                ctx.beginPath()
+                ctx.moveTo(cx - 7, height - 22)
+                ctx.lineTo(cx - 14, height - 2)
+                ctx.lineTo(cx - 7, height - 8)
+                ctx.closePath()
+                ctx.fill()
+                ctx.beginPath()
+                ctx.moveTo(cx + 7, height - 22)
+                ctx.lineTo(cx + 14, height - 2)
+                ctx.lineTo(cx + 7, height - 8)
+                ctx.closePath()
+                ctx.fill()
+            }
+            Connections {
+                target: missileRoot
+                function onLoadedChanged() { missileBody.requestPaint() }
+                function onRepaintKeyChanged() { missileBody.requestPaint() }
+            }
+        }
+    }
     /* ---------------- INTRO ---------------- */
     Rectangle {
         id: fadeoutintro
@@ -181,14 +256,12 @@ Window {
         opacity: 1.0
         z: 10
     }
-
     Rectangle {
         id: hudIntro
         anchors.fill: parent
         color: "#0B0E14"
         opacity: 1.0
         z: 11
-
         Canvas {
             anchors.fill: parent
             onPaint: {
@@ -199,17 +272,15 @@ Window {
                 for (var y = 0; y < height; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
             }
         }
-
         Image {
             id: saabLogo
-            source: "Saab.jpg"
+            source: "Saab(1).jpg"
             width: 1920
             height: 1920
             anchors.centerIn: parent
             opacity: 0.9
             fillMode: Image.PreserveAspectFit
         }
-
         // Connection lampa på intro - blinkar gult i connect state (req 2211)
         Rectangle {
             id: intro_lamp
@@ -218,7 +289,6 @@ Window {
             anchors.bottom: intro_text.top
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.bottomMargin: 15
-
             SequentialAnimation on opacity {
                 loops: Animation.Infinite
                 running: intro_lamp.color === "yellow"
@@ -226,7 +296,6 @@ Window {
                 NumberAnimation { from: 1.0; to: 0.4; duration: 600 }
             }
         }
-
         Text {
             id: intro_text
             text: "PRESS ANY BUTTON TO START"
@@ -243,11 +312,37 @@ Window {
                 NumberAnimation { from: 1.0; to: 0.2; duration: 900 }
             }
         }
-
+        // Quit-knapp alltid synlig på intro-skärmen (tillagt från nya UI:n)
+        /*Button {
+            id: introQuit
+            text: "Quit"
+            width: 120
+            height: 52
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.margins: 20
+            font.pixelSize: 18
+            font.bold: true
+            font.family: "Eurostile"
+            background: Rectangle {
+                radius: 4
+                color: "#8A1F1F"
+                border.color: "#C44A4A"
+                border.width: 2
+            }
+            contentItem: Text {
+                text: introQuit.text
+                anchors.centerIn: parent
+                color: "white"
+                font: introQuit.font
+            }
+            onClicked: window.close()
+        }*/
         TcpClient {
             id: client
             onConnected: {
                 console.log("Connected")
+                window.everOperative = true
                 intro_lamp.color = "green"
                 fadeOutAnimation.start()
                 fadeOutAnimation2.start()
@@ -258,9 +353,6 @@ Window {
                 status_light.color = "green"
                 client.sendMessage(status)
                 is_idle_time.start()
-
-
-
                 moved_timer.start()
             }
             onErrorOccurred: {
@@ -271,13 +363,9 @@ Window {
                 status_light.color = "red"
             }
         }
-
-
     }
-
     /* ---------------- MAIN UI ---------------- */
     Rectangle { anchors.fill: parent; color: "#0B0E14" }
-
     Canvas {
         anchors.fill: parent
         opacity: 0.18
@@ -289,38 +377,12 @@ Window {
             for (var y = 0; y < height; y += 80) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
         }
     }
-
-    // Graferna längst ner
-    Row {
-        anchors.bottom: parent.bottom
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.margins: 10
-        anchors.bottomMargin: 10
-        spacing: 10
-        height: 150
-
-        Graph {
-            width: parent.width / 2 - 5
-            height: parent.height
-            lineColor: "#AFC7FF"
-            dataValue: window.socketValue
-        }
-
-        Graph {
-            width: parent.width / 2 - 5
-            height: parent.height
-            lineColor: "#FF5555"
-            dataValue: window.socketValue2
-        }
-    }
-
     // Vänster kolumn - States
     Rectangle {
         id: statesPanel
         anchors.left: parent.left
-        anchors.top: parent.top
-        anchors.bottom: graphRow.top
+        anchors.top: topBar.bottom
+        anchors.bottom: parent.bottom
         anchors.leftMargin: 10
         anchors.topMargin: 10
         anchors.bottomMargin: 10
@@ -329,12 +391,10 @@ Window {
         border.color: "#3A4A66"
         border.width: 2
         radius: 4
-
         // States + LED centrerade i panelen
         Column {
             anchors.centerIn: parent
             spacing: 10
-
             // RGB Status Indicator LED (req 2211/2221/2231)
             // - Connect state:   flashing Yellow
             // - Operative state: solid Green
@@ -344,11 +404,9 @@ Window {
                 width: 22; height: 22; radius: 11
                 color: "yellow"
                 anchors.horizontalCenter: parent.horizontalCenter
-
                 // Glow-effekt
                 layer.enabled: true
                 layer.effect: null
-
                 // Flashing Yellow animation - only active in Connect state (req 2211)
                 SequentialAnimation on opacity {
                     id: connectBlink
@@ -358,7 +416,6 @@ Window {
                     NumberAnimation { from: 1.0; to: 0.4; duration: 600 }
                 }
             }
-
             // CONNECT STATE
             Rectangle {
                 width: 240; height: 50; radius: 4
@@ -375,7 +432,6 @@ Window {
                     anchors.centerIn: parent
                 }
             }
-
             // IDLE STATE
             Rectangle {
                 width: 240; height: 50; radius: 4
@@ -392,7 +448,6 @@ Window {
                     anchors.centerIn: parent
                 }
             }
-
             // OPERATIVE STATE
             Rectangle {
                 width: 240; height: 50; radius: 4
@@ -411,13 +466,12 @@ Window {
             }
         }
     }
-
     // Höger kolumn - Speed
     Rectangle {
         id: speedPanel
         anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.bottom: graphRow.top
+        anchors.top: topBar.bottom
+        anchors.bottom: parent.bottom
         anchors.rightMargin: 10
         anchors.topMargin: 10
         anchors.bottomMargin: 10
@@ -426,11 +480,9 @@ Window {
         border.color: "#3A4A66"
         border.width: 2
         radius: 4
-
         Column {
             anchors.centerIn: parent
             spacing: 20
-
             // Titel
             Text {
                 text: "SPEED"
@@ -442,7 +494,6 @@ Window {
                 anchors.horizontalCenter: parent.horizontalCenter
                 font.letterSpacing: 3
             }
-
             // Stor siffra
             Text {
                 text: window.speed
@@ -452,7 +503,6 @@ Window {
                 color: "#D6E1FF"
                 anchors.horizontalCenter: parent.horizontalCenter
             }
-
             // Enhet
             Text {
                 text: "km/h"
@@ -464,7 +514,6 @@ Window {
                 anchors.horizontalCenter: parent.horizontalCenter
                 font.letterSpacing: 2
             }
-
             // Progressbar
             Rectangle {
                 width: 220; height: 6; radius: 3
@@ -472,7 +521,6 @@ Window {
                 color: "#0B0E14"
                 border.color: "#2A3A55"
                 border.width: 1
-
                 Rectangle {
                     height: parent.height
                     width: Math.min(parent.width, window.speed / 120 * parent.width)
@@ -486,17 +534,16 @@ Window {
             }
         }
     }
-
     // Mitten - Turretview
     Item {
         id: turretItem
         anchors.left: statesPanel.right
         anchors.right: speedPanel.left
-        anchors.top: parent.top
-        anchors.bottom: graphRow.top
+        anchors.top: topBar.bottom
+        anchors.bottom: parent.bottom
         anchors.margins: 10
         property bool showFirst: true
-
+        property bool cameraReady: false
         Rectangle {
             anchors.fill: parent
             color: "#1A2333"
@@ -504,7 +551,6 @@ Window {
             border.width: window.lockedOn ? 3 : 2
             radius: 4
         }
-
         Image {
             id: feed1
             anchors.fill: parent
@@ -512,10 +558,12 @@ Window {
             cache: false
             visible: turretItem.showFirst
             onStatusChanged: {
-                if (status === Image.Ready) turretItem.showFirst = true
+                if (status === Image.Ready) {
+                    turretItem.showFirst = true
+                    turretItem.cameraReady = true
+                }
             }
         }
-
         Image {
             id: feed2
             anchors.fill: parent
@@ -523,10 +571,12 @@ Window {
             cache: false
             visible: !turretItem.showFirst
             onStatusChanged: {
-                if (status === Image.Ready) turretItem.showFirst = false
+                if (status === Image.Ready) {
+                    turretItem.showFirst = false
+                    turretItem.cameraReady = true
+                }
             }
         }
-
         Timer {
             interval: 150
             running: true
@@ -540,7 +590,51 @@ Window {
                 }
             }
         }
-
+        // Laddningsskärm för kameran (tillagt från nya UI:n)
+        Rectangle {
+            id: cameraLoading
+            anchors.fill: parent
+            radius: 4
+            color: "#0B0E14"
+            visible: !turretItem.cameraReady
+            z: 10
+            Canvas {
+                anchors.fill: parent
+                opacity: 0.18
+                onPaint: {
+                    var ctx = getContext("2d")
+                    ctx.strokeStyle = "#1A2333"
+                    ctx.lineWidth = 1
+                    for (var x = 0; x < width; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke() }
+                    for (var y = 0; y < height; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
+                }
+            }
+            Column {
+                anchors.centerIn: parent
+                spacing: 22
+                BusyIndicator {
+                    running: cameraLoading.visible
+                    width: 64
+                    height: 64
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+                Text {
+                    text: "LOADING CAMERA"
+                    color: "#AFC7FF"
+                    font.pixelSize: 24
+                    font.bold: true
+                    font.family: "Eurostile"
+                    font.letterSpacing: 3
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    SequentialAnimation on opacity {
+                        loops: Animation.Infinite
+                        running: cameraLoading.visible
+                        NumberAnimation { from: 0.35; to: 1.0; duration: 700 }
+                        NumberAnimation { from: 1.0; to: 0.35; duration: 700 }
+                    }
+                }
+            }
+        }
         Rectangle {
             visible: window.lockedOn
             anchors.top: parent.top
@@ -565,7 +659,6 @@ Window {
                 }
             }
         }
-
         Canvas {
             anchors.fill: parent
             visible: window.targetX > 0
@@ -589,14 +682,80 @@ Window {
                 function onLockedOnChanged() { parent.requestPaint() }
             }
         }
+        // Missilrad (tillagt från nya UI:n)
+        Row {
+            id: missileRow
+            anchors.bottom: parent.bottom
+            anchors.left: parent.left
+            anchors.bottomMargin: 16
+            anchors.leftMargin: 24
+            spacing: 28
+            z: 5
+            Missile { loaded: window.mLeft;  selected: window.selectedMissile === 0 }
+            Missile { loaded: window.mMid;   selected: window.selectedMissile === 1 }
+            Missile { loaded: window.mRight; selected: window.selectedMissile === 2 }
+        }
+        // Radar-ruta (tillagt från nya UI:n)
+        Rectangle {
+            id: radarBox
+            width: 96
+            height: 96
+            radius: 4
+            color: "#0B0E14"
+            border.color: window.lockedOn ? "#FF5555" : "#3A4A66"
+            border.width: 2
+            anchors.right: parent.right
+            anchors.rightMargin: 24
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 16
+            z: 5
+            Text {
+                text: "RADAR"
+                anchors.bottom: parent.top
+                anchors.bottomMargin: 4
+                anchors.horizontalCenter: parent.horizontalCenter
+                color: "#6A7A99"
+                font.pixelSize: 11
+                font.bold: true
+                font.family: "Eurostile"
+                font.letterSpacing: 2
+            }
+            Canvas {
+                id: radarCanvas
+                anchors.fill: parent
+                anchors.margins: 4
+                onPaint: {
+                    var ctx = getContext("2d")
+                    ctx.clearRect(0, 0, width, height)
+                    ctx.strokeStyle = "#1A2333"
+                    ctx.lineWidth = 1
+                    ctx.beginPath(); ctx.moveTo(width / 2, 0); ctx.lineTo(width / 2, height); ctx.stroke()
+                    ctx.beginPath(); ctx.moveTo(0, height / 2); ctx.lineTo(width, height / 2); ctx.stroke()
+                    if (window.targetX > 0) {
+                        var bx = window.targetX / 640 * width
+                        var by = window.targetY / 480 * height
+                        var col = window.lockedOn ? "#FF5555" : "#00FFFF"
+                        ctx.strokeStyle = col
+                        ctx.fillStyle = col
+                        ctx.lineWidth = 2
+                        ctx.beginPath(); ctx.arc(bx, by, 4, 0, Math.PI * 2); ctx.fill()
+                        ctx.beginPath(); ctx.arc(bx, by, 10, 0, Math.PI * 2); ctx.stroke()
+                    }
+                }
+                Connections {
+                    target: window
+                    function onTargetXChanged() { radarCanvas.requestPaint() }
+                    function onTargetYChanged() { radarCanvas.requestPaint() }
+                    function onLockedOnChanged() { radarCanvas.requestPaint() }
+                }
+            }
+        }
     }
-
     SdlHelper {
         id: sdl
         property bool locked: false
         onButtonPressed: {
             reset_idle()
-
             if (status == "Intro") {
                 if (locked) return
                 locked = true
@@ -610,7 +769,6 @@ Window {
                 status = "Operative"
                 client.sendMessage(status)
                 lockTimer.start()
-
                 if(status != "error")
                 {
                     status = "Operative"
@@ -626,7 +784,6 @@ Window {
                 case 9: shoulder_l = 1; break
                 case 10: shoulder_r = 1; break
                 }
-
                 tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
             }
         }
@@ -643,7 +800,6 @@ Window {
                 tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
             }
         }
-
         onAxisMoved: {
             //moved_timer.restart()
             if (status !== "Intro") {
@@ -657,30 +813,313 @@ Window {
                 if (Math.abs(value) > 2000) reset_idle()
                 console.log(x1_movement+ x2_movement)
                 //console.log("axis moved")
-
                 tcpJoystick.sendMessage(x1_movement + "," + y1_movement + "," + x2_movement + "," + y2_movement + "," + right_trig + "," + left_trig)
                 //moved_timer.start()
             }
         }
     }
-
     Component.onCompleted: sdl.initGamepad()
-
-    Item {
-        id: graphRow
-        anchors.bottom: parent.bottom
+    // Toppmeny (tillagt från nya UI:n) - ersätter de fristående Quit/Tutorial-knapparna
+    Rectangle {
+        id: topBar
+        z: 12
+        visible: window.everOperative
+        anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: 170
+        height: 84
+        color: "#1A2333"
+        border.color: "#3A4A66"
+        border.width: 2
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: 2
+            color: "#00CFFF"
+            opacity: 0.55
+        }
+
+        Row {
+            anchors.right: parent.right
+            anchors.rightMargin: 16
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 16
+            Button {
+                id: debugButton
+                text: "DEBUG"
+                width: 220
+                height: 58
+                font.pixelSize: 22
+                font.bold: true
+                font.family: "Eurostile"
+                background: Rectangle {
+                    radius: 4
+                    color: "#0B0E14"
+                    border.color: "#3A4A66"
+                    border.width: 2
+                }
+                contentItem: Text {
+                    text: debugButton.text
+                    anchors.centerIn: parent
+                    color: "#AFC7FF"
+                    font: debugButton.font
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                onClicked: debugScreen.visible = !debugScreen.visible
+            }
+            Button {
+                id: tutorialButton
+                text: "TUTORIAL"
+                width: 220
+                height: 58
+                font.pixelSize: 22
+                font.bold: true
+                font.family: "Eurostile"
+                background: Rectangle {
+                    radius: 4
+                    color: "#0B0E14"
+                    border.color: "#3A4A66"
+                    border.width: 2
+                }
+                contentItem: Text {
+                    text: tutorialButton.text
+                    anchors.centerIn: parent
+                    color: "#AFC7FF"
+                    font: tutorialButton.font
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                onClicked: tutorial.visible = !tutorial.visible
+            }
+        }
+    }
+    /* ---------------- DEBUG SCREEN (tillagt från nya UI:n) ---------------- */
+    Rectangle {
+        id: debugScreen
+        anchors.fill: parent
+        visible: false
+        color: "#0B0E14"
+        z: 21
+        Canvas {
+            anchors.fill: parent
+            opacity: 0.18
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.strokeStyle = "#1A2333"
+                ctx.lineWidth = 1
+                for (var x = 0; x < width; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke() }
+                for (var y = 0; y < height; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
+            }
+        }
+        Text {
+            id: debugTitle
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: 36
+            text: "DEBUGS"
+            font.pixelSize: 40
+            font.bold: true
+            font.family: "Eurostile"
+            font.letterSpacing: 6
+            color: "#AFC7FF"
+        }
+        Text{
+            text: socketValue
+            color:"white"
+        }
+
+        Grid {
+            anchors.top: debugTitle.bottom
+            anchors.topMargin: 28
+            anchors.horizontalCenter: parent.horizontalCenter
+            columns: 3
+            spacing: 20
+            Repeater {
+                model: [
+                    { label: "DEBUG 1", color: "#AFC7FF" },
+                    { label: "DEBUG 2", color: "#FF5555" },
+                    { label: "DEBUG 3", color: "#00FF88" },
+                    { label: "DEBUG 4", color: "#FFCC00" },
+                    { label: "DEBUG 5", color: "#FF9E3D" },
+                    { label: "DEBUG 6", color: "#B388FF" }
+                ]
+                delegate: Rectangle {
+                    width: 400
+                    height: 270
+                    radius: 6
+                    color: "#141B2C"
+                    border.color: modelData.color
+                    border.width: 2
+                    Column {
+                        anchors.centerIn: parent
+                        spacing: 10
+                        Text {
+                            text: modelData.label
+                            font.pixelSize: 16
+                            font.bold: true
+                            font.family: "Eurostile"
+                            font.letterSpacing: 2
+                            color: modelData.color
+                            anchors.horizontalCenter: parent.horizontalCenter
+                        }
+                        Graph {
+                            width: 360
+                            height: 210
+                            lineColor: modelData.color
+                            dataValue: index % 2 === 0 ? window.socketValue : window.socketValue2
+                        }
+                    }
+                }
+            }
+        }
+
+        Button {
+            id: debugBack
+            text: "Tillbaka"
+            width: 120
+            height: 52
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 20
+            font.pixelSize: 18
+            font.bold: true
+            font.family: "Eurostile"
+            background: Rectangle {
+                radius: 4
+                color: "#1A2333"
+                border.color: "#3A4A66"
+                border.width: 2
+            }
+            contentItem: Text {
+                text: debugBack.text
+                anchors.centerIn: parent
+                color: "#AFC7FF"
+                font: debugBack.font
+            }
+            onClicked: debugScreen.visible = false
+        }
+    }
+    /* ---------------- TUTORIAL SCREEN (tillagt från nya UI:n, samma innehåll som i din kod) ---------------- */
+    Rectangle {
+        id: tutorial
+        anchors.fill: parent
+        visible: false
+        color: "#0B0E14"
+        z: 20
+        Canvas {
+            anchors.fill: parent
+            opacity: 0.18
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.strokeStyle = "#1A2333"
+                ctx.lineWidth = 1
+                for (var x = 0; x < width; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke() }
+                for (var y = 0; y < height; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
+            }
+        }
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: 140
+            text: "TUTORIAL"
+            font.pixelSize: 48
+            font.bold: true
+            font.family: "Eurostile"
+            font.letterSpacing: 6
+            color: "#AFC7FF"
+        }
+        Column {
+            anchors.centerIn: parent
+            spacing: 24
+            Text { text: "Left Joystick  =  Movement/Steering";        font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
+            Text { text: "Right joystick  =  Turret Control/Movement"; font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
+            Text { text: "R1  =  Shoot";                               font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
+        }
+
+        Button {
+            id: backBtn
+            text: "Tillbaka"
+            width: 120
+            height: 52
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 20
+            font.pixelSize: 18
+            font.bold: true
+            font.family: "Eurostile"
+            background: Rectangle {
+                radius: 4
+                color: "#1A2333"
+                border.color: "#3A4A66"
+                border.width: 2
+            }
+            contentItem: Text {
+                text: backBtn.text
+                anchors.centerIn: parent
+                color: "#AFC7FF"
+                font: backBtn.font
+            }
+            onClicked: tutorial.visible = false
+        }
+    }
+    Timer {
+        id: lockTimer
+        interval: 1500
+        repeat: false
+        onTriggered: sdl.locked = false
+    }
+    // Idle timer: 5 minuter = 300 000 ms (req 2231)
+    Timer {
+        id: is_idle_time
+        interval: 3000
+        repeat: false
+        onTriggered: {
+            if (status != "Intro" && status != "error") {
+                status = "idle"
+                window.isidle = true
+                //client.sendMessage(status)
+                // Idle state: solid White (req 2231)
+                status_light.color = "white"
+                idle.start()
+            }
+        }
+    }
+    Timer{
+        id: idle
+        interval: 100
+        repeat:true
+        onTriggered: {
+            client.sendMessage("idle")
+        }
+    }
+    Timer{
+        id: moved_timer
+        interval: 1
+        repeat:true
+        onTriggered: {
+            /*x1_movement = 0
+            y1_movement = 0
+            x2_movement = 0
+            y2_movement = 0
+            right_trig = 0
+            left_trig = 0*/
+            console.log("Joystick unmoved")
+            tcpJoystick.sendMessage(x1_movement + "," + y1_movement + "," + x2_movement + "," + y2_movement + "," + right_trig + "," + left_trig)
+        }
     }
 
     Button {
-        z: 12
         id: quit
         text: "Quit"
+        width: 120
+        height: 52
+        z:100
         anchors.left: parent.left
+        anchors.leftMargin: 16
+        anchors.topMargin: 16
         anchors.top: parent.top
-        anchors.margins: 20
         font.pixelSize: 18
         font.bold: true
         font.family: "Eurostile"
@@ -699,125 +1138,8 @@ Window {
         onClicked: {
             client.sendMessage("connect")
             window.close()
-                    }
-    }
-    Button{
-        id: tutorialButton
-        z: 12
-        text: "Tutorial"
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.margins: 20
-        font.pixelSize: 18
-        font.bold: true
-        font.family: "Eurostile"
-        background: Rectangle {
-            radius: 4
-            color: "#0B0E14"
-            border.color: "#0B0E14"
-            border.width: 2}
-        onClicked: {
-            if(tutorial.visible === false)
-            tutorial.visible = true
-            else
-                tutorial.visible = false
-        }
-
-    }
-
-    Rectangle{
-        id: tutorial
-        anchors.fill: parent
-        visible: false
-        color: "#1A2333"
-        z: 11
-        Text{
-            text: "Controls"
-            color: "white"
-            font.pixelSize: 60
-            anchors.horizontalCenter: parent.horizontalCenter
-        }
-
-        Text{
-            color: "white"
-            font.bold:true
-            text: "Left Joystick  =  Movement/Steering "
-            font.pixelSize: 30
-            x: 50
-            y: 80
-
-        }
-        Text{
-            color: "white"
-            font.bold:true
-            text: "Right joystick  =  Turret Control/Movement"
-            font.pixelSize: 30
-            x: 50
-            y: 120
-
-        }
-        Text{
-            color: "white"
-            font.bold:true
-            text: "R1  =  Shoot "
-            font.pixelSize: 30
-            x: 50
-            y: 160
-
         }
     }
-
-    Timer {
-        id: lockTimer
-        interval: 1500
-        repeat: false
-        onTriggered: sdl.locked = false
-    }
-
-    // Idle timer: 5 minuter = 300 000 ms (req 2231)
-    Timer {
-        id: is_idle_time
-        interval: 3000
-        repeat: false
-        onTriggered: {
-            if (status != "Intro" && status != "error") {
-                status = "idle"
-                window.isidle = true
-
-                //client.sendMessage(status)
-                // Idle state: solid White (req 2231)
-                status_light.color = "white"
-                idle.start()
-            }
-        }
-    }
-    Timer{
-        id: idle
-        interval: 100
-        repeat:true
-        onTriggered: {
-            client.sendMessage("idle")
-        }
-
-    }
-
-
-    Timer{
-        id: moved_timer
-        interval: 1
-        repeat:true
-        onTriggered: {
-            /*x1_movement = 0
-            y1_movement = 0
-            x2_movement = 0
-            y2_movement = 0
-            right_trig = 0
-            left_trig = 0*/
-            console.log("Joystick unmoved")
-            tcpJoystick.sendMessage(x1_movement + "," + y1_movement + "," + x2_movement + "," + y2_movement + "," + right_trig + "," + left_trig)
-        }
-    }
-
     function reset_idle() {
         window.isidle = false
         if (status != "Intro" && status != "error") {
@@ -829,12 +1151,10 @@ Window {
             // Connect state: flashing Yellow (req 2211) - animation driven by color binding
             status_light.color = "yellow"
         }
-
         client.sendMessage(status)
         idle.stop()
         is_idle_time.restart()
     }
-
     PropertyAnimation { id: fadeOutAnimation;  target: fadeoutintro; property: "opacity"; to: 0.0; duration: 1000 }
     PropertyAnimation { id: fadeOutAnimation2; target: saabLogo;     property: "opacity"; to: 0.0; duration: 1000 }
     PropertyAnimation { id: fadeOutHUD;        target: hudIntro;     property: "opacity"; to: 0.0; duration: 1200 }
