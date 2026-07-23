@@ -81,10 +81,43 @@ Window {
         property string network: ""
         onConnected: console.log("Connected to server")
         onMessageRecieved: {
+
             network += msg
             if(network.indexOf("\n") !== -1){
                 let cleanValue = network.replace("\r","").replace("\n","")
-                socketValue = parseFloat(cleanValue)
+                let values = cleanValue.split(",")
+                for(let i = 0; i < values.length; i++)
+
+                {
+                     let val = parseFloat(values[i].trim())
+                    switch(i)
+                    {
+                    case 0:
+                        socketValue = val
+                        break;
+
+                    case 1:
+                        socketValue2 = val
+                        break;
+                    case 2:
+                        socketValue3 = val
+                        break;
+                    case 3:
+                        socketValue4 = val
+                        break;
+                    case 4:
+                        socketValue5 = val
+                        break;
+                    case 5:
+                        socketValue6 = val
+                        break;
+                     }
+
+
+
+                }
+
+
                 network = ""
             }
         }
@@ -1063,7 +1096,33 @@ Window {
                             width: 360
                             height: 210
                             lineColor: modelData.color
-                            dataValue: index % 2 === 0 ? window.socketValue : window.socketValue2
+                            dataValue: {
+                                switch(index)
+                                {
+                                case 0:
+                                    socketValue
+                                    break;
+                                case 1:
+                                    socketValue2
+                                    break;
+                                case 2:
+                                    socketValue3
+                                    break;
+                                case 3:
+                                    socketValue4
+                                    break;
+                                case 4:
+                                    socketValue5
+                                    break;
+                                case 5:
+                                    socketValue6
+                                    break;
+                                }
+
+                               // index % 2 === 0 ? window.socketValue : window.
+
+
+                        }
                         }
                     }
                 }
