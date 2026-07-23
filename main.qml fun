@@ -25,6 +25,10 @@ Window {
     property int speed: 0
     property real socketValue: 0.0
     property real socketValue2: 0.0
+    property real socketValue3: 0.0
+    property real socketValue4: 0.0
+    property real socketValue5: 0.0
+    property real socketValue6: 0.0
     property string status: "Intro"
     property bool isidle: false
     property int a: 0
