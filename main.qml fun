@@ -1056,6 +1056,35 @@ Window {
             font.letterSpacing: 6
             color: "#AFC7FF"
         }
+Text{
+            text: socketValue
+            color:"white"
+        }
+        Text{
+            text:socketValue2
+            color:"white"
+            x:200
+        }
+        Text{
+            text:socketValue3
+            color:"white"
+            x:400
+        }
+        Text{
+            text:socketValue4
+            color:"white"
+            x:600
+        }
+        Text{
+            text:socketValue5
+            color:"white"
+            x:800
+        }
+        Text{
+            text: socketValue6
+            color:"white"
+            x:1000
+        }
 
         Grid {
             anchors.top: debugTitle.bottom
