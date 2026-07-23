@@ -1,1272 +1,234 @@
-import QtQuick
-import QtQuick.Controls
-import QtQuick.Shapes
-import QtQuick.Window
-import QtQml
-import SDL 1.0
-import Networking 1.0
-
-Window {
-    id: window
-    width: 1280
-    height: 800
-    visible: true
-    visibility: Window.FullScreen
-    title: "Saab System UI"
-    color: "#0B0E14"
-
-    property bool lockedOn: false
-    property var canisters: []
-    property bool canister1: false
-    property bool canister2: false
-    property bool canister3: false
-    property int targetX: 0
-    property int targetY: 0
-    property int speed: 0
-    property real socketValue: 0.0
-    property real socketValue2: 0.0
-    property string status: "Intro"
-    property bool isidle: false
-    property int a: 0
-    property int b: 0
-    property int y: 0
-    property int x: 0
-    property int shoulder_r: 0
-    property int shoulder_l: 0
-    property int leftX: 0
-    property int leftY: 0
-    property int rightX: 0
-    property int rightY: 0
-    property real x1_movement: 0.0
-    property real y1_movement: 0.0
-    property real x2_movement: 0.0
-    property real y2_movement: 0.0
-    property int right_trig: 0
-    property int left_trig: 0
-    property int smooth_cx: 0
-    property int smooth_cy: 0
-    property int selectedMissile: 1
-    property bool mLeft: true
-    property bool mMid: true
-    property bool mRight: true
-    property bool everOperative: false
-
-    function sendUnlock() {
-        var xhr = new XMLHttpRequest()
-        xhr.open("POST", "http://192.168.4.200:8080/unlock")
-        xhr.send()
-    }
-
-    Timer {
-        interval: 80
-        running: true
-        repeat: true
-        onTriggered: {
-            var xhr = new XMLHttpRequest()
-            xhr.open("GET", "http://192.168.4.200:8080/status")
-            xhr.onreadystatechange = function() {
-                if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                    var data = JSON.parse(xhr.responseText)
-                    window.lockedOn = data.locked
-                    window.targetX = data.cx
-                    window.targetY = data.cy
-                }
-            }
-            xhr.send()
-        }
-    }
-
-    TcpClient {
-        id: tcpGraph
-        property string network: ""
-        onConnected: console.log("Connected to server")
-        onMessageRecieved: {
-            network += msg
-            if(network.indexOf("\n") !== -1){
-                let cleanValue = network.replace("\r","").replace("\n","")
-                socketValue = parseFloat(cleanValue)
-                network = ""
-            }
-        }
-    }
-
-    TcpClient {
-        id: tcpButtons
-        onConnected: console.log("Buttons connected")
-        onMessageRecieved: {
-            canisters = msg
-            canister1 = canisters[0]
-            canister2 = canisters[1]
-            canister3 = canisters[2]
-        }
-    }
-
-    TcpClient { id: tcpJoystick; onConnected: console.log("Joysticks connected") }
-
-    Timer {
-        interval: 50
-        running: true
-        repeat: true
-        onTriggered: tcpGraph.sendMessage("READ\n")
-    }
-
-    component Graph: Item {
-        id: graphRoot
-        property color lineColor: "#AFC7FF"
-        property color gridColor: "#1A2333"
-        property real lineWidth: 2.5
-        property int updateInterval: 40
-        property double dataValue: 0
-
-        Rectangle {
-            anchors.fill: parent
-            color: "#0B0E14"
-            border.color: "#3A4A66"
-            border.width: 2
-            radius: 4
-        }
-
-        Canvas {
-            anchors.fill: parent
-            opacity: 0.3
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.strokeStyle = graphRoot.gridColor
-                ctx.lineWidth = 1
-                for (var x = 0; x < width; x += 30) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke() }
-                for (var y = 0; y < height; y += 30) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
-            }
-        }
-
-        property var points: [Qt.point(0, height/2)]
-
-        Timer {
-            interval: graphRoot.updateInterval
-            running: true
-            repeat: true
-            onTriggered: {
-                var p = graphRoot.points.slice()
-                var newY = height/2 - (graphRoot.dataValue * (height * 0.4) - height * 0.2)
-                newY = Math.max(10, Math.min(height - 10, newY))
-                p.push(Qt.point(p.length * 3, newY))
-                while (p.length > 0 && p[p.length-1].x > width + 10) {
-                    for (var i = 0; i < p.length; i++) p[i].x -= 3
-                }
-                if (p.length > (width / 3) + 5) p.shift()
-                graphRoot.points = p
-            }
-        }
-
-        Shape {
-            anchors.fill: parent
-            antialiasing: true
-            clip: true
-            ShapePath {
-                strokeColor: graphRoot.lineColor
-                strokeWidth: graphRoot.lineWidth
-                fillColor: "transparent"
-                startX: 0
-                startY: graphRoot.height / 2
-                PathPolyline { path: graphRoot.points }
-            }
-        }
-    }
-
-    component Missile: Item {
-        id: missileRoot
-        property bool loaded: true
-        property bool selected: false
-        property color loadedColor: "#FF3B3B"
-        property color spentColor: "#FFFFFF"
-        property int repaintKey: 0
-        width: 26
-        height: 72
-
-        Rectangle {
-            anchors.centerIn: parent
-            width: parent.width + 18
-            height: parent.height + 18
-            radius: 6
-            color: "transparent"
-            border.color: "#00E5FF"
-            border.width: 3
-            visible: missileRoot.selected
-            z: 2
-            SequentialAnimation on opacity {
-                running: missileRoot.selected
-                loops: Animation.Infinite
-                NumberAnimation { from: 0.5; to: 1.0; duration: 600 }
-                NumberAnimation { from: 1.0; to: 0.5; duration: 600 }
-            }
-        }
-
-        Canvas {
-            id: glow
-            anchors.centerIn: parent
-            width: parent.width + 26
-            height: parent.height + 26
-            visible: missileRoot.loaded
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.clearRect(0, 0, width, height)
-                var g = ctx.createRadialGradient(width/2, height/2, 2, width/2, height/2, width/2)
-                g.addColorStop(0, "rgba(255,59,59,0.55)")
-                g.addColorStop(1, "rgba(255,59,59,0.0)")
-                ctx.fillStyle = g
-                ctx.fillRect(0, 0, width, height)
-            }
-            onVisibleChanged: if (visible) requestPaint()
-            Component.onCompleted: requestPaint()
-            Connections {
-                target: missileRoot
-                function onRepaintKeyChanged() { if (glow.visible) glow.requestPaint() }
-            }
-            SequentialAnimation on opacity {
-                loops: Animation.Infinite
-                running: missileRoot.loaded
-                NumberAnimation { from: 0.4; to: 1.0; duration: 800 }
-                NumberAnimation { from: 1.0; to: 0.4; duration: 800 }
-            }
-        }
-
-        Canvas {
-            id: missileBody
-            anchors.fill: parent
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.clearRect(0, 0, width, height)
-                var col = missileRoot.loaded ? missileRoot.loadedColor : missileRoot.spentColor
-                ctx.fillStyle = col
-                var cx = width / 2
-                ctx.beginPath()
-                ctx.moveTo(cx, 2)
-                ctx.lineTo(cx - 7, 20)
-                ctx.lineTo(cx + 7, 20)
-                ctx.closePath()
-                ctx.fill()
-                ctx.fillRect(cx - 7, 20, 14, height - 40)
-                ctx.beginPath()
-                ctx.moveTo(cx - 7, height - 22)
-                ctx.lineTo(cx - 14, height - 2)
-                ctx.lineTo(cx - 7, height - 8)
-                ctx.closePath()
-                ctx.fill()
-                ctx.beginPath()
-                ctx.moveTo(cx + 7, height - 22)
-                ctx.lineTo(cx + 14, height - 2)
-                ctx.lineTo(cx + 7, height - 8)
-                ctx.closePath()
-                ctx.fill()
-            }
-            Connections {
-                target: missileRoot
-                function onLoadedChanged() { missileBody.requestPaint() }
-                function onRepaintKeyChanged() { missileBody.requestPaint() }
-            }
-        }
-    }
-
-    /* ---------------- INTRO ---------------- */
-    Rectangle {
-        id: fadeoutintro
-        anchors.fill: parent
-        color: "#0B0E14"
-        opacity: 1.0
-        z: 10
-    }
-
-    Rectangle {
-        id: hudIntro
-        anchors.fill: parent
-        color: "#0B0E14"
-        opacity: 1.0
-        z: 11
-
-        Canvas {
-            anchors.fill: parent
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.strokeStyle = "#1A2333"
-                ctx.lineWidth = 1
-                for (var x = 0; x < width; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke() }
-                for (var y = 0; y < height; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
-            }
-        }
-
-        Image {
-            id: saabLogo
-            source: "Saab(1).jpg"
-            width: 1920
-            height: 1920
-            anchors.centerIn: parent
-            opacity: 0.9
-            fillMode: Image.PreserveAspectFit
-        }
-
-        Rectangle {
-            id: intro_lamp
-            width: 24; height: 24; radius: 12
-            color: "yellow"
-            anchors.bottom: intro_text.top
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.bottomMargin: 15
-            SequentialAnimation on opacity {
-                loops: Animation.Infinite
-                running: intro_lamp.color === "yellow"
-                NumberAnimation { from: 0.4; to: 1.0; duration: 600 }
-                NumberAnimation { from: 1.0; to: 0.4; duration: 600 }
-            }
-        }
-
-        Text {
-            id: intro_text
-            text: "PRESS ANY BUTTON TO START"
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.bottom: parent.bottom
-            anchors.bottomMargin: 120
-            font.pixelSize: 32
-            font.bold: true
-            font.family: "Eurostile"
-            color: "#AFC7FF"
-            SequentialAnimation on opacity {
-                loops: Animation.Infinite
-                NumberAnimation { from: 0.2; to: 1.0; duration: 900 }
-                NumberAnimation { from: 1.0; to: 0.2; duration: 900 }
-            }
-        }
-
-        Button {
-            id: introQuit
-            text: "Quit"
-            width: 120
-            height: 52
-            anchors.left: parent.left
-            anchors.top: parent.top
-            anchors.margins: 20
-            font.pixelSize: 18
-            font.bold: true
-            font.family: "Eurostile"
-            background: Rectangle {
-                radius: 4
-                color: "#8A1F1F"
-                border.color: "#C44A4A"
-                border.width: 2
-            }
-            contentItem: Text {
-                text: introQuit.text
-                anchors.centerIn: parent
-                color: "white"
-                font: introQuit.font
-            }
-            onClicked: window.close()
-        }
-
-        TcpClient {
-            id: client
-            onConnected: {
-                window.everOperative = true
-                intro_lamp.color = "green"
-                fadeOutAnimation.start()
-                fadeOutAnimation2.start()
-                fadeOutHUD.start()
-                fadeInAnimation2.start()
-                status = "Operative"
-                status_light.color = "green"
-                client.sendMessage(status)
-                is_idle_time.start()
-                moved_timer.start()
-            }
-            onErrorOccurred: {
-                if(status != "Intro") { status = "error" }
-                intro_lamp.color = "red"
-                intro_text.text = "Error: " + err
-                status_light.color = "red"
-            }
-        }
-    }
-
-    /* ---------------- MAIN UI ---------------- */
-    Rectangle { anchors.fill: parent; color: "#0B0E14" }
-
-    Canvas {
-        anchors.fill: parent
-        opacity: 0.18
-        onPaint: {
-            var ctx = getContext("2d")
-            ctx.strokeStyle = "#1A2333"
-            ctx.lineWidth = 1
-            for (var x = 0; x < width; x += 80) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke() }
-            for (var y = 0; y < height; y += 80) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
-        }
-    }
-
-    Rectangle {
-        id: statesPanel
-        anchors.left: parent.left
-        anchors.top: topBar.bottom
-        anchors.bottom: parent.bottom
-        anchors.leftMargin: 10
-        anchors.topMargin: 10
-        anchors.bottomMargin: 10
-        width: 300
-        color: "#1A2333"
-        border.color: "#3A4A66"
-        border.width: 2
-        radius: 4
-
-        Column {
-            anchors.centerIn: parent
-            spacing: 10
-
-            Rectangle {
-                id: status_light
-                width: 22; height: 22; radius: 11
-                color: "yellow"
-                anchors.horizontalCenter: parent.horizontalCenter
-                layer.enabled: true
-                layer.effect: null
-                SequentialAnimation on opacity {
-                    id: connectBlink
-                    loops: Animation.Infinite
-                    running: status_light.color === "#ffff00" || status_light.color === "yellow"
-                    NumberAnimation { from: 0.4; to: 1.0; duration: 600 }
-                    NumberAnimation { from: 1.0; to: 0.4; duration: 600 }
-                }
-            }
-
-            Rectangle {
-                width: 240; height: 50; radius: 4
-                anchors.horizontalCenter: parent.horizontalCenter
-                color: status === "Operative" ? "#0D2B1F" : "transparent"
-                border.color: status === "Operative" ? "#00FF88" : "#2A3A55"
-                border.width: 2
-                Text {
-                    text: "CONNECT STATE"
-                    color: status === "Operative" ? "#00FF88" : "#6A7A99"
-                    font.pixelSize: 17
-                    font.bold: true
-                    font.family: "Eurostile"
-                    anchors.centerIn: parent
-                }
-            }
-
-            Rectangle {
-                width: 240; height: 50; radius: 4
-                anchors.horizontalCenter: parent.horizontalCenter
-                color: window.isidle ? "#2B2200" : "transparent"
-                border.color: window.isidle ? "#FFCC00" : "#2A3A55"
-                border.width: 2
-                Text {
-                    text: "IDLE STATE"
-                    color: window.isidle ? "#FFCC00" : "#6A7A99"
-                    font.pixelSize: 17
-                    font.bold: true
-                    font.family: "Eurostile"
-                    anchors.centerIn: parent
-                }
-            }
-
-            Rectangle {
-                width: 240; height: 50; radius: 4
-                anchors.horizontalCenter: parent.horizontalCenter
-                color: status === "Operative" && !window.isidle ? "#131B2E" : "transparent"
-                border.color: status === "Operative" && !window.isidle ? "#AFC7FF" : "#2A3A55"
-                border.width: 2
-                Text {
-                    text: "OPERATIVE STATE"
-                    color: status === "Operative" && !window.isidle ? "#AFC7FF" : "#6A7A99"
-                    font.pixelSize: 17
-                    font.bold: true
-                    font.family: "Eurostile"
-                    anchors.centerIn: parent
-                }
-            }
-        }
-    }
-
-    Rectangle {
-        id: speedPanel
-        anchors.right: parent.right
-        anchors.top: topBar.bottom
-        anchors.bottom: parent.bottom
-        anchors.rightMargin: 10
-        anchors.topMargin: 10
-        anchors.bottomMargin: 10
-        width: 300
-        color: "#1A2333"
-        border.color: "#3A4A66"
-        border.width: 2
-        radius: 4
-
-        Column {
-            anchors.centerIn: parent
-            spacing: 20
-
-            Text {
-                text: "SPEED"
-                font.pixelSize: 13
-                font.bold: true
-                font.family: "Eurostile"
-                color: "#AFC7FF"
-                opacity: 0.6
-                anchors.horizontalCenter: parent.horizontalCenter
-                font.letterSpacing: 3
-            }
-
-            Text {
-                text: window.speed
-                font.pixelSize: 80
-                font.bold: true
-                font.family: "Eurostile"
-                color: "#D6E1FF"
-                anchors.horizontalCenter: parent.horizontalCenter
-            }
-
-            Text {
-                text: "km/h"
-                font.pixelSize: 16
-                font.bold: true
-                font.family: "Eurostile"
-                color: "#AFC7FF"
-                opacity: 0.5
-                anchors.horizontalCenter: parent.horizontalCenter
-                font.letterSpacing: 2
-            }
-
-            Rectangle {
-                width: 220; height: 6; radius: 3
-                anchors.horizontalCenter: parent.horizontalCenter
-                color: "#0B0E14"
-                border.color: "#2A3A55"
-                border.width: 1
-                Rectangle {
-                    height: parent.height
-                    width: Math.min(parent.width, window.speed / 120 * parent.width)
-                    radius: 3
-                    gradient: Gradient {
-                        orientation: Gradient.Horizontal
-                        GradientStop { position: 0.0; color: "#AFC7FF" }
-                        GradientStop { position: 1.0; color: "#00CFFF" }
-                    }
-                }
-            }
-        }
-    }
-
-    Item {
-        id: turretItem
-        anchors.left: statesPanel.right
-        anchors.right: speedPanel.left
-        anchors.top: topBar.bottom
-        anchors.bottom: parent.bottom
-        anchors.margins: 10
-        property bool showFirst: true
-        property bool cameraReady: false
-
-        Rectangle {
-            anchors.fill: parent
-            color: "#1A2333"
-            border.color: window.lockedOn ? "#FF3333" : "#FFCC00"
-            border.width: 3
-            radius: 4
-        }
-
-        Image {
-            id: feed1
-            anchors.fill: parent
-            fillMode: Image.Stretch
-            cache: false
-            visible: turretItem.showFirst
-            onStatusChanged: {
-                if (status === Image.Ready) {
-                    turretItem.showFirst = true
-                    turretItem.cameraReady = true
-                    feedTimer.waitingForLoad = false
-                } else if (status === Image.Error) {
-                    feedTimer.waitingForLoad = false
-                }
-            }
-        }
-
-        Image {
-            id: feed2
-            anchors.fill: parent
-            fillMode: Image.Stretch
-            cache: false
-            visible: !turretItem.showFirst
-            onStatusChanged: {
-                if (status === Image.Ready) {
-                    turretItem.showFirst = false
-                    turretItem.cameraReady = true
-                    feedTimer.waitingForLoad = false
-                } else if (status === Image.Error) {
-                    feedTimer.waitingForLoad = false
-                }
-            }
-        }
-
-        Timer {
-            id: feedTimer
-            interval: 33
-            running: true
-            repeat: true
-            property bool waitingForLoad: false
-            onTriggered: {
-                if (feedTimer.waitingForLoad) return
-                feedTimer.waitingForLoad = true
-                var url = "http://192.168.4.200:8080/video_frame?t=" + Date.now()
-                if (turretItem.showFirst) {
-                    feed2.source = url
-                } else {
-                    feed1.source = url
-                }
-            }
-        }
-
-        Rectangle {
-            id: cameraLoading
-            anchors.fill: parent
-            radius: 4
-            color: "#0B0E14"
-            visible: !turretItem.cameraReady
-            z: 10
-
-            Canvas {
-                anchors.fill: parent
-                opacity: 0.18
-                onPaint: {
-                    var ctx = getContext("2d")
-                    ctx.strokeStyle = "#1A2333"
-                    ctx.lineWidth = 1
-                    for (var x = 0; x < width; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke() }
-                    for (var y = 0; y < height; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
-                }
-            }
-
-            Column {
-                anchors.centerIn: parent
-                spacing: 22
-                BusyIndicator {
-                    running: cameraLoading.visible
-                    width: 64
-                    height: 64
-                    anchors.horizontalCenter: parent.horizontalCenter
-                }
-                Text {
-                    text: "LOADING CAMERA"
-                    color: "#AFC7FF"
-                    font.pixelSize: 24
-                    font.bold: true
-                    font.family: "Eurostile"
-                    font.letterSpacing: 3
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    SequentialAnimation on opacity {
-                        loops: Animation.Infinite
-                        running: cameraLoading.visible
-                        NumberAnimation { from: 0.35; to: 1.0; duration: 700 }
-                        NumberAnimation { from: 1.0; to: 0.35; duration: 700 }
-                    }
-                }
-            }
-        }
-
-        // Status-indikator — röd = locked, gul blinkande = letar
-        Rectangle {
-            anchors.top: parent.top
-            anchors.right: parent.right
-            anchors.margins: 15
-            width: 140
-            height: 40
-            radius: 4
-            z: 5
-            color: window.lockedOn ? "#3A0000" : "#2B2200"
-            border.color: window.lockedOn ? "#FF3333" : "#FFCC00"
-            border.width: 2
-
-            Text {
-                anchors.centerIn: parent
-                text: window.lockedOn ? "LOCKED ON" : "SEARCHING..."
-                color: window.lockedOn ? "#FF3333" : "#FFCC00"
-                font.pixelSize: 14
-                font.bold: true
-                font.family: "Eurostile"
-                SequentialAnimation on opacity {
-                    loops: Animation.Infinite
-                    running: !window.lockedOn
-                    NumberAnimation { from: 0.4; to: 1.0; duration: 500 }
-                    NumberAnimation { from: 1.0; to: 0.4; duration: 500 }
-                }
-            }
-        }
-
-        Canvas {
-            anchors.fill: parent
-            visible: window.targetX > 0
-            z: 4
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.clearRect(0, 0, width, height)
-                var sx = window.targetX / 640 * width
-                var sy = window.targetY / 480 * height
-                ctx.strokeStyle = window.lockedOn ? "#FF3333" : "#FFCC00"
-                ctx.lineWidth = 2
-                ctx.beginPath(); ctx.moveTo(sx - 20, sy); ctx.lineTo(sx + 20, sy); ctx.stroke()
-                ctx.beginPath(); ctx.moveTo(sx, sy - 20); ctx.lineTo(sx, sy + 20); ctx.stroke()
-                ctx.beginPath()
-                ctx.arc(sx, sy, 15, 0, Math.PI * 2)
-                ctx.stroke()
-            }
-            Connections {
-                target: window
-                function onTargetXChanged() { parent.requestPaint() }
-                function onTargetYChanged() { parent.requestPaint() }
-                function onLockedOnChanged() { parent.requestPaint() }
-            }
-        }
-
-        Row {
-            id: missileRow
-            anchors.bottom: parent.bottom
-            anchors.left: parent.left
-            anchors.bottomMargin: 16
-            anchors.leftMargin: 24
-            spacing: 28
-            z: 5
-            Missile { loaded: window.mLeft;  selected: window.selectedMissile === 0 }
-            Missile { loaded: window.mMid;   selected: window.selectedMissile === 1 }
-            Missile { loaded: window.mRight; selected: window.selectedMissile === 2 }
-        }
-
-        Rectangle {
-            id: radarBox
-            width: 96
-            height: 96
-            radius: 4
-            color: "#0B0E14"
-            border.color: window.lockedOn ? "#FF3333" : "#FFCC00"
-            border.width: 2
-            anchors.right: parent.right
-            anchors.rightMargin: 24
-            anchors.bottom: parent.bottom
-            anchors.bottomMargin: 16
-            z: 5
-
-            Text {
-                text: "RADAR"
-                anchors.bottom: parent.top
-                anchors.bottomMargin: 4
-                anchors.horizontalCenter: parent.horizontalCenter
-                color: "#6A7A99"
-                font.pixelSize: 11
-                font.bold: true
-                font.family: "Eurostile"
-                font.letterSpacing: 2
-            }
-
-            Canvas {
-                id: radarCanvas
-                anchors.fill: parent
-                anchors.margins: 4
-                onPaint: {
-                    var ctx = getContext("2d")
-                    ctx.clearRect(0, 0, width, height)
-                    ctx.strokeStyle = "#1A2333"
-                    ctx.lineWidth = 1
-                    ctx.beginPath(); ctx.moveTo(width/2, 0); ctx.lineTo(width/2, height); ctx.stroke()
-                    ctx.beginPath(); ctx.moveTo(0, height/2); ctx.lineTo(width, height/2); ctx.stroke()
-                    if (window.targetX > 0) {
-                        var bx = window.targetX / 640 * width
-                        var by = window.targetY / 480 * height
-                        var col = window.lockedOn ? "#FF3333" : "#FFCC00"
-                        ctx.strokeStyle = col
-                        ctx.fillStyle = col
-                        ctx.lineWidth = 2
-                        ctx.beginPath(); ctx.arc(bx, by, 4, 0, Math.PI * 2); ctx.fill()
-                        ctx.beginPath(); ctx.arc(bx, by, 10, 0, Math.PI * 2); ctx.stroke()
-                    }
-                }
-                Connections {
-                    target: window
-                    function onTargetXChanged() { radarCanvas.requestPaint() }
-                    function onTargetYChanged() { radarCanvas.requestPaint() }
-                    function onLockedOnChanged() { radarCanvas.requestPaint() }
-                }
-            }
-        }
-    }
-
-    SdlHelper {
-        id: sdl
-        property bool locked: false
-        onButtonPressed: {
-            reset_idle()
-            if (status == "Intro") {
-                if (locked) return
-                locked = true
-                intro_lamp.color = "yellow"
-                intro_text.text = "Trying to Connect"
-                client.connectToHost("192.168.4.1", 2222)
-                tcpGraph.connectToHost("192.168.4.1", 2223)
-                tcpButtons.connectToHost("192.168.4.1", 2224)
-                tcpJoystick.connectToHost("192.168.4.1", 2225)
-                status = "Operative"
-                client.sendMessage(status)
-                lockTimer.start()
-            }
-            else if(status !== "Intro") {
-                switch(button) {
-                case 0:
-                    a = 1
-                    window.sendUnlock()
-                    break
-                case 1: b = 1; break
-                case 2: x = 1; break
-                case 3: y = 1; break
-                case 9: shoulder_l = 1; break
-                case 10: shoulder_r = 1; break
-                }
-                tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
-            }
-        }
-        onButtonReleased: {
-            if (status !== "Intro") {
-                switch(button) {
-                case 0: a = 0; break
-                case 1: b = 0; break
-                case 2: x = 0; break
-                case 3: y = 0; break
-                case 9: shoulder_l = 0; break
-                case 10: shoulder_r = 0; break
-                }
-                tcpButtons.sendMessage(a + "," + b + "," + x + "," + y + "," + shoulder_l + "," + shoulder_r)
-            }
-        }
-        onAxisMoved: {
-            if (status !== "Intro") {
-                status = "Operative"
-                switch (axis) {
-                case 0: x1_movement = Math.abs(value) > 15000 ? value : 0; break
-                case 1: y1_movement = Math.abs(value) > 15000 ? value : 0; break
-                case 2: x2_movement = Math.abs(value) > 15000 ? value : 0; break
-                case 3: y2_movement = Math.abs(value) > 15000 ? value : 0; break
-                }
-                if (Math.abs(value) > 2000) reset_idle()
-                tcpJoystick.sendMessage(x1_movement + "," + y1_movement + "," + x2_movement + "," + y2_movement + "," + right_trig + "," + left_trig)
-            }
-        }
-    }
-
-    Component.onCompleted: sdl.initGamepad()
-
-    Rectangle {
-        id: topBar
-        z: 12
-        visible: window.everOperative
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        height: 84
-        color: "#1A2333"
-        border.color: "#3A4A66"
-        border.width: 2
-
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 2
-            color: "#00CFFF"
-            opacity: 0.55
-        }
-
-        Button {
-            id: quit
-            text: "Quit"
-            width: 120
-            height: 52
-            anchors.left: parent.left
-            anchors.leftMargin: 16
-            anchors.verticalCenter: parent.verticalCenter
-            font.pixelSize: 18
-            font.bold: true
-            font.family: "Eurostile"
-            background: Rectangle {
-                radius: 4
-                color: "#8A1F1F"
-                border.color: "#C44A4A"
-                border.width: 2
-            }
-            contentItem: Text {
-                text: quit.text
-                anchors.centerIn: parent
-                color: "white"
-                font: quit.font
-            }
-            onClicked: {
-                client.sendMessage("connect")
-                window.close()
-            }
-        }
-
-        Row {
-            anchors.right: parent.right
-            anchors.rightMargin: 16
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 16
-
-            Button {
-                id: idleButton
-                text: "IDLE"
-                width: 220
-                height: 58
-                font.pixelSize: 22
-                font.bold: true
-                font.family: "Eurostile"
-                background: Rectangle {
-                    radius: 4
-                    color: "#0B0E14"
-                    border.color: "#3A4A66"
-                    border.width: 2
-                }
-                contentItem: Text {
-                    text: idleButton.text
-                    anchors.centerIn: parent
-                    color: "#AFC7FF"
-                    font: idleButton.font
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-                onClicked: enterIdle()
-            }
-
-            Button {
-                id: debugButton
-                text: "DEBUG"
-                width: 220
-                height: 58
-                font.pixelSize: 22
-                font.bold: true
-                font.family: "Eurostile"
-                background: Rectangle {
-                    radius: 4
-                    color: "#0B0E14"
-                    border.color: "#3A4A66"
-                    border.width: 2
-                }
-                contentItem: Text {
-                    text: debugButton.text
-                    anchors.centerIn: parent
-                    color: "#AFC7FF"
-                    font: debugButton.font
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-                onClicked: debugScreen.visible = !debugScreen.visible
-            }
-
-            Button {
-                id: tutorialButton
-                text: "TUTORIAL"
-                width: 220
-                height: 58
-                font.pixelSize: 22
-                font.bold: true
-                font.family: "Eurostile"
-                background: Rectangle {
-                    radius: 4
-                    color: "#0B0E14"
-                    border.color: "#3A4A66"
-                    border.width: 2
-                }
-                contentItem: Text {
-                    text: tutorialButton.text
-                    anchors.centerIn: parent
-                    color: "#AFC7FF"
-                    font: tutorialButton.font
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-                onClicked: tutorial.visible = !tutorial.visible
-            }
-        }
-    }
-
-    /* ---------------- DEBUG SCREEN ---------------- */
-    Rectangle {
-        id: debugScreen
-        anchors.fill: parent
-        visible: false
-        color: "#0B0E14"
-        z: 21
-
-        Canvas {
-            anchors.fill: parent
-            opacity: 0.18
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.strokeStyle = "#1A2333"
-                ctx.lineWidth = 1
-                for (var x = 0; x < width; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke() }
-                for (var y = 0; y < height; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
-            }
-        }
-
-        Text {
-            id: debugTitle
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.top: parent.top
-            anchors.topMargin: 36
-            text: "DEBUGS"
-            font.pixelSize: 40
-            font.bold: true
-            font.family: "Eurostile"
-            font.letterSpacing: 6
-            color: "#AFC7FF"
-        }
-
-        Grid {
-            anchors.top: debugTitle.bottom
-            anchors.topMargin: 28
-            anchors.horizontalCenter: parent.horizontalCenter
-            columns: 3
-            spacing: 20
-
-            Repeater {
-                model: [
-                    { label: "DEBUG 1", color: "#AFC7FF" },
-                    { label: "DEBUG 2", color: "#FF5555" },
-                    { label: "DEBUG 3", color: "#00FF88" },
-                    { label: "DEBUG 4", color: "#FFCC00" },
-                    { label: "DEBUG 5", color: "#FF9E3D" },
-                    { label: "DEBUG 6", color: "#B388FF" }
-                ]
-                delegate: Rectangle {
-                    width: 400
-                    height: 270
-                    radius: 6
-                    color: "#141B2C"
-                    border.color: modelData.color
-                    border.width: 2
-                    Column {
-                        anchors.centerIn: parent
-                        spacing: 10
-                        Text {
-                            text: modelData.label
-                            font.pixelSize: 16
-                            font.bold: true
-                            font.family: "Eurostile"
-                            font.letterSpacing: 2
-                            color: modelData.color
-                            anchors.horizontalCenter: parent.horizontalCenter
-                        }
-                        Graph {
-                            width: 360
-                            height: 210
-                            lineColor: modelData.color
-                            dataValue: index % 2 === 0 ? window.socketValue : window.socketValue2
-                        }
-                    }
-                }
-            }
-        }
-
-        Button {
-            id: debugQuit
-            text: "Quit"
-            width: 120
-            height: 52
-            anchors.left: parent.left
-            anchors.top: parent.top
-            anchors.margins: 20
-            font.pixelSize: 18
-            font.bold: true
-            font.family: "Eurostile"
-            background: Rectangle {
-                radius: 4
-                color: "#8A1F1F"
-                border.color: "#C44A4A"
-                border.width: 2
-            }
-            contentItem: Text {
-                text: debugQuit.text
-                anchors.centerIn: parent
-                color: "white"
-                font: debugQuit.font
-            }
-            onClicked: window.close()
-        }
-
-        Button {
-            id: debugBack
-            text: "Tillbaka"
-            width: 120
-            height: 52
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.margins: 20
-            font.pixelSize: 18
-            font.bold: true
-            font.family: "Eurostile"
-            background: Rectangle {
-                radius: 4
-                color: "#1A2333"
-                border.color: "#3A4A66"
-                border.width: 2
-            }
-            contentItem: Text {
-                text: debugBack.text
-                anchors.centerIn: parent
-                color: "#AFC7FF"
-                font: debugBack.font
-            }
-            onClicked: debugScreen.visible = false
-        }
-    }
-
-    /* ---------------- TUTORIAL SCREEN ---------------- */
-    Rectangle {
-        id: tutorial
-        anchors.fill: parent
-        visible: false
-        color: "#0B0E14"
-        z: 20
-
-        Canvas {
-            anchors.fill: parent
-            opacity: 0.18
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.strokeStyle = "#1A2333"
-                ctx.lineWidth = 1
-                for (var x = 0; x < width; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke() }
-                for (var y = 0; y < height; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
-            }
-        }
-
-        Text {
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.top: parent.top
-            anchors.topMargin: 140
-            text: "TUTORIAL"
-            font.pixelSize: 48
-            font.bold: true
-            font.family: "Eurostile"
-            font.letterSpacing: 6
-            color: "#AFC7FF"
-        }
-
-        Column {
-            anchors.centerIn: parent
-            spacing: 24
-            Text { text: "Left Joystick  =  Movement/Steering";        font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
-            Text { text: "Right joystick  =  Turret Control/Movement"; font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
-            Text { text: "R1  =  Shoot";                               font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
-            Text { text: "A   =  Unlock target";                       font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
-        }
-
-        Button {
-            id: tutorialQuit
-            text: "Quit"
-            width: 120
-            height: 52
-            anchors.left: parent.left
-            anchors.top: parent.top
-            anchors.margins: 20
-            font.pixelSize: 18
-            font.bold: true
-            font.family: "Eurostile"
-            background: Rectangle {
-                radius: 4
-                color: "#8A1F1F"
-                border.color: "#C44A4A"
-                border.width: 2
-            }
-            contentItem: Text {
-                text: tutorialQuit.text
-                anchors.centerIn: parent
-                color: "white"
-                font: tutorialQuit.font
-            }
-            onClicked: window.close()
-        }
-
-        Button {
-            id: backBtn
-            text: "Tillbaka"
-            width: 120
-            height: 52
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.margins: 20
-            font.pixelSize: 18
-            font.bold: true
-            font.family: "Eurostile"
-            background: Rectangle {
-                radius: 4
-                color: "#1A2333"
-                border.color: "#3A4A66"
-                border.width: 2
-            }
-            contentItem: Text {
-                text: backBtn.text
-                anchors.centerIn: parent
-                color: "#AFC7FF"
-                font: backBtn.font
-            }
-            onClicked: tutorial.visible = false
-        }
-    }
-
-    Timer { id: lockTimer; interval: 1500; repeat: false; onTriggered: sdl.locked = false }
-
-    Timer {
-        id: is_idle_time
-        interval: 300000
-        repeat: false
-        onTriggered: enterIdle()
-    }
-
-    Timer {
-        id: idle
-        interval: 100
-        repeat: true
-        onTriggered: client.sendMessage("idle")
-    }
-
-    Timer {
-        id: moved_timer
-        interval: 1
-        repeat: true
-        onTriggered: {
-            tcpJoystick.sendMessage(x1_movement + "," + y1_movement + "," + x2_movement + "," + y2_movement + "," + right_trig + "," + left_trig)
-        }
-    }
-
-    function enterIdle() {
-        if (status != "Intro" && status != "error") {
-            status = "idle"
-            window.isidle = true
-            status_light.color = "white"
-            idle.start()
-        }
-    }
-
-    function reset_idle() {
-        window.isidle = false
-        if (status != "Intro" && status != "error") {
-            status_light.color = "green"
-        } else if (status == "error") {
-            status_light.color = "red"
-        } else {
-            status_light.color = "yellow"
-        }
-        client.sendMessage(status)
-        idle.stop()
-        is_idle_time.restart()
-    }
-
-    PropertyAnimation { id: fadeOutAnimation;  target: fadeoutintro; property: "opacity"; to: 0.0; duration: 1000 }
-    PropertyAnimation { id: fadeOutAnimation2; target: saabLogo;     property: "opacity"; to: 0.0; duration: 1000 }
-    PropertyAnimation { id: fadeOutHUD;        target: hudIntro;     property: "opacity"; to: 0.0; duration: 1200 }
-    PropertyAnimation { id: fadeInAnimation2;  target: turretItem;   property: "opacity"; to: 1.0; duration: 1000 }
-}
+from picamera2 import Picamera2
+import cv2
+import numpy as np
+import threading
+import time
+from flask import Flask, Response, jsonify
+import serial
+
+app = Flask(__name__)
+
+picam2 = Picamera2()
+config = picam2.create_video_configuration(main={"size": (640, 480)}, controls={"FrameRate": 60})
+picam2.configure(config)
+picam2.start()
+picam2.set_controls({"ExposureTime": 100, "AnalogueGain": 1.0})
+
+FRAME_W = 640
+FRAME_H = 480
+LOCK_THRESHOLD = 5
+LOCK_LOST_THRESHOLD = 60
+MAX_JUMP = 200
+BRIGHTNESS_THRESHOLD = 200
+
+tracked_cx = None
+tracked_cy = None
+lock_counter = 0
+lost_counter = 0
+is_locked = False
+force_unlock = False
+unlock_cooldown_until = 0
+
+velocity_x = 0.0
+velocity_y = 0.0
+predicted_cx = None
+predicted_cy = None
+
+smooth_cx = 0
+smooth_cy = 0
+
+frame_count = 0
+fps_start = time.time()
+current_fps = 0.0
+
+latest_jpeg = None
+jpeg_lock = threading.Lock()
+
+ser = serial.Serial('/dev/serial0', baudrate=115200, timeout=0.01)
+
+def find_closest_contour(contours, cx, cy):
+    best = None
+    best_dist = float('inf')
+    best_cx = 0
+    best_cy = 0
+    for c in contours:
+        M = cv2.moments(c)
+        if M["m00"] == 0:
+            continue
+        ccx = int(M["m10"] / M["m00"])
+        ccy = int(M["m01"] / M["m00"])
+        dist = ((ccx - cx) ** 2 + (ccy - cy) ** 2) ** 0.5
+        if dist < best_dist:
+            best_dist = dist
+            best = c
+            best_cx = ccx
+            best_cy = ccy
+    return best, best_cx, best_cy, best_dist
+
+def camera_loop():
+    global tracked_cx, tracked_cy
+    global lock_counter, lost_counter, is_locked, smooth_cx, smooth_cy
+    global force_unlock, unlock_cooldown_until
+    global velocity_x, velocity_y, predicted_cx, predicted_cy
+    global frame_count, fps_start, current_fps
+    global latest_jpeg
+
+    while True:
+        frame_count += 1
+        elapsed = time.time() - fps_start
+        if elapsed >= 1.0:
+            current_fps = frame_count / elapsed
+            frame_count = 0
+            fps_start = time.time()
+
+        frame = picam2.capture_array()
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        _, mask = cv2.threshold(gray, BRIGHTNESS_THRESHOLD, 255, cv2.THRESH_BINARY)
+        mask_3ch = cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB)
+        frame = cv2.bitwise_and(frame, mask_3ch)
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if force_unlock:
+            tracked_cx = None
+            tracked_cy = None
+            lock_counter = 0
+            lost_counter = 0
+            is_locked = False
+            force_unlock = False
+            velocity_x = 0.0
+            velocity_y = 0.0
+            predicted_cx = None
+            predicted_cy = None
+            unlock_cooldown_until = time.time() + 10
+
+        if time.time() >= unlock_cooldown_until:
+            if len(contours) > 0:
+                # Rita grön box runt ALLA ljuskällor
+                for c in contours:
+                    M = cv2.moments(c)
+                    if M["m00"] == 0:
+                        continue
+                    ccx = int(M["m10"] / M["m00"])
+                    ccy = int(M["m01"] / M["m00"])
+                    size = 20
+                    cv2.rectangle(frame,
+                                  (ccx - size, ccy - size),
+                                  (ccx + size, ccy + size),
+                                  (0, 255, 0), 1)
+
+                # Tracking på primär ljuskälla
+                if tracked_cx is None:
+                    best_c = max(contours, key=cv2.contourArea)
+                    M = cv2.moments(best_c)
+                    if M["m00"] > 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
+                        tracked_cx = cx
+                        tracked_cy = cy
+                        lock_counter = 1
+                        lost_counter = 0
+                        velocity_x = 0.0
+                        velocity_y = 0.0
+                else:
+                    search_cx = predicted_cx if predicted_cx is not None else tracked_cx
+                    search_cy = predicted_cy if predicted_cy is not None else tracked_cy
+
+                    _, new_cx, new_cy, dist = find_closest_contour(contours, search_cx, search_cy)
+
+                    if dist < MAX_JUMP:
+                        velocity_x = velocity_x * 0.7 + (new_cx - tracked_cx) * 0.3
+                        velocity_y = velocity_y * 0.7 + (new_cy - tracked_cy) * 0.3
+                        tracked_cx = new_cx
+                        tracked_cy = new_cy
+                        lock_counter = min(lock_counter + 1, LOCK_THRESHOLD + 1)
+                        lost_counter = 0
+                        predicted_cx = None
+                        predicted_cy = None
+                    else:
+                        lost_counter += 1
+                        predicted_cx = int(tracked_cx + velocity_x)
+                        predicted_cy = int(tracked_cy + velocity_y)
+            else:
+                if tracked_cx is not None:
+                    lost_counter += 1
+                    predicted_cx = int(tracked_cx + velocity_x)
+                    predicted_cy = int(tracked_cy + velocity_y)
+
+            if lost_counter >= LOCK_LOST_THRESHOLD:
+                tracked_cx = None
+                tracked_cy = None
+                lock_counter = 0
+                lost_counter = 0
+                is_locked = False
+                velocity_x = 0.0
+                velocity_y = 0.0
+                predicted_cx = None
+                predicted_cy = None
+
+            is_locked = lock_counter >= LOCK_THRESHOLD
+
+            # Rita röd box runt den trackade ljuskällan (överskriver den gröna)
+            if tracked_cx is not None and lock_counter > 0:
+                color = (255, 0, 0) if is_locked else (0, 255, 255)
+                size = 22
+                cv2.rectangle(frame,
+                              (tracked_cx - size, tracked_cy - size),
+                              (tracked_cx + size, tracked_cy + size),
+                              color, 2)
+
+                smooth_cx = tracked_cx
+                smooth_cy = tracked_cy
+
+                data_coord = f"{tracked_cx},{tracked_cy} \n"
+                ser.write(data_coord.encode('utf-8'))
+
+            if predicted_cx is not None and lost_counter > 0:
+                cv2.circle(frame, (predicted_cx, predicted_cy), 4, (150, 150, 0), 1)
+
+        cv2.putText(frame, f"FPS: {int(current_fps)}", (8, 18),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 140, 140), 1)
+
+        _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        with jpeg_lock:
+            latest_jpeg = jpeg.tobytes()
+
+cam_thread = threading.Thread(target=camera_loop, daemon=True)
+cam_thread.start()
+
+def generate():
+    while True:
+        with jpeg_lock:
+            if latest_jpeg is None:
+                time.sleep(0.01)
+                continue
+            frame_bytes = latest_jpeg
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+@app.route('/video')
+def video():
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/video_frame')
+def video_frame():
+    with jpeg_lock:
+        if latest_jpeg is None:
+            return '', 503
+        frame_bytes = latest_jpeg
+    return Response(frame_bytes, mimetype='image/jpeg')
+
+@app.route('/status')
+def status():
+    return jsonify({"locked": is_locked, "cx": smooth_cx, "cy": smooth_cy, "fps": int(current_fps)})
+
+@app.route('/unlock', methods=['POST'])
+def unlock():
+    global force_unlock
+    force_unlock = True
+    return jsonify({"ok": True})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080, threaded=True)
