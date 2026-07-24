@@ -4,15 +4,20 @@ import numpy as np
 import threading
 import time
 from flask import Flask, Response, jsonify
-import serial
 
 app = Flask(__name__)
 
 picam2 = Picamera2()
-config = picam2.create_video_configuration(main={"size": (640, 480)}, controls={"FrameRate": 60})
+config = picam2.create_video_configuration(
+    main={"size": (640, 480)},
+    controls={"FrameRate": 60}
+)
 picam2.configure(config)
 picam2.start()
-picam2.set_controls({"ExposureTime": 100, "AnalogueGain": 1.0})
+picam2.set_controls({
+    "ExposureTime": 100,
+    "AnalogueGain": 1.0
+})
 
 FRAME_W = 640
 FRAME_H = 480
@@ -37,17 +42,12 @@ predicted_cy = None
 smooth_cx = 0
 smooth_cy = 0
 
-# TILLAGT: senaste avståndet från ESP32/LiDAR
-latest_distance_mm = None
-
 frame_count = 0
 fps_start = time.time()
 current_fps = 0.0
 
 latest_jpeg = None
 jpeg_lock = threading.Lock()
-
-ser = serial.Serial('/dev/serial0', baudrate=115200, timeout=0.01)
 
 
 def find_closest_contour(contours, cx, cy):
@@ -65,7 +65,10 @@ def find_closest_contour(contours, cx, cy):
         ccx = int(M["m10"] / M["m00"])
         ccy = int(M["m01"] / M["m00"])
 
-        dist = ((ccx - cx) ** 2 + (ccy - cy) ** 2) ** 0.5
+        dist = (
+            (ccx - cx) ** 2 +
+            (ccy - cy) ** 2
+        ) ** 0.5
 
         if dist < best_dist:
             best_dist = dist
@@ -76,26 +79,13 @@ def find_closest_contour(contours, cx, cy):
     return best, best_cx, best_cy, best_dist
 
 
-# TILLAGT: tar emot DIST,1450 från ESP32
-def serial_receive_loop():
-    global latest_distance_mm
-
-    while True:
-        try:
-            line = ser.readline().decode('utf-8', errors='ignore').strip()
-
-            if line.startswith('DIST,'):
-                latest_distance_mm = int(line.split(',', 1)[1])
-
-        except (ValueError, serial.SerialException):
-            time.sleep(0.05)
-
-
 def camera_loop():
     global tracked_cx, tracked_cy
-    global lock_counter, lost_counter, is_locked, smooth_cx, smooth_cy
+    global lock_counter, lost_counter
+    global is_locked, smooth_cx, smooth_cy
     global force_unlock, unlock_cooldown_until
-    global velocity_x, velocity_y, predicted_cx, predicted_cy
+    global velocity_x, velocity_y
+    global predicted_cx, predicted_cy
     global frame_count, fps_start, current_fps
     global latest_jpeg
 
@@ -136,10 +126,13 @@ def camera_loop():
             lost_counter = 0
             is_locked = False
             force_unlock = False
+
             velocity_x = 0.0
             velocity_y = 0.0
+
             predicted_cx = None
             predicted_cy = None
+
             unlock_cooldown_until = time.time() + 10
 
         if time.time() >= unlock_cooldown_until:
@@ -147,7 +140,11 @@ def camera_loop():
             if len(contours) > 0:
 
                 if tracked_cx is None:
-                    best_c = max(contours, key=cv2.contourArea)
+                    best_c = max(
+                        contours,
+                        key=cv2.contourArea
+                    )
+
                     M = cv2.moments(best_c)
 
                     if M["m00"] > 0:
@@ -156,14 +153,25 @@ def camera_loop():
 
                         tracked_cx = cx
                         tracked_cy = cy
+
                         lock_counter = 1
                         lost_counter = 0
+
                         velocity_x = 0.0
                         velocity_y = 0.0
 
                 else:
-                    search_cx = predicted_cx if predicted_cx is not None else tracked_cx
-                    search_cy = predicted_cy if predicted_cy is not None else tracked_cy
+                    search_cx = (
+                        predicted_cx
+                        if predicted_cx is not None
+                        else tracked_cx
+                    )
+
+                    search_cy = (
+                        predicted_cy
+                        if predicted_cy is not None
+                        else tracked_cy
+                    )
 
                     _, new_cx, new_cy, dist = find_closest_contour(
                         contours,
@@ -172,8 +180,15 @@ def camera_loop():
                     )
 
                     if dist < MAX_JUMP:
-                        velocity_x = velocity_x * 0.7 + (new_cx - tracked_cx) * 0.3
-                        velocity_y = velocity_y * 0.7 + (new_cy - tracked_cy) * 0.3
+                        velocity_x = (
+                            velocity_x * 0.7 +
+                            (new_cx - tracked_cx) * 0.3
+                        )
+
+                        velocity_y = (
+                            velocity_y * 0.7 +
+                            (new_cy - tracked_cy) * 0.3
+                        )
 
                         tracked_cx = new_cx
                         tracked_cy = new_cy
@@ -189,29 +204,44 @@ def camera_loop():
 
                     else:
                         lost_counter += 1
-                        predicted_cx = int(tracked_cx + velocity_x)
-                        predicted_cy = int(tracked_cy + velocity_y)
+
+                        predicted_cx = int(
+                            tracked_cx + velocity_x
+                        )
+
+                        predicted_cy = int(
+                            tracked_cy + velocity_y
+                        )
 
             else:
                 if tracked_cx is not None:
                     lost_counter += 1
-                    predicted_cx = int(tracked_cx + velocity_x)
-                    predicted_cy = int(tracked_cy + velocity_y)
+
+                    predicted_cx = int(
+                        tracked_cx + velocity_x
+                    )
+
+                    predicted_cy = int(
+                        tracked_cy + velocity_y
+                    )
 
             if lost_counter >= LOCK_LOST_THRESHOLD:
                 tracked_cx = None
                 tracked_cy = None
+
                 lock_counter = 0
                 lost_counter = 0
                 is_locked = False
+
                 velocity_x = 0.0
                 velocity_y = 0.0
+
                 predicted_cx = None
                 predicted_cy = None
 
             is_locked = lock_counter >= LOCK_THRESHOLD
 
-            # Rita grön box runt ALLA detekterade ljuskällor
+            # Rita grön box runt alla detekterade ljuskällor
             for c in contours:
                 M = cv2.moments(c)
 
@@ -231,25 +261,32 @@ def camera_loop():
                     1
                 )
 
-            # Rita tracking-box (röd=locked, gul=söker) ovanpå
+            # Tracking-box
             if tracked_cx is not None and lock_counter > 0:
-                color = (255, 0, 0) if is_locked else (0, 255, 255)
+                color = (
+                    (255, 0, 0)
+                    if is_locked
+                    else (0, 255, 255)
+                )
+
                 size = 20
 
                 cv2.rectangle(
                     frame,
-                    (tracked_cx - size, tracked_cy - size),
-                    (tracked_cx + size, tracked_cy + size),
+                    (
+                        tracked_cx - size,
+                        tracked_cy - size
+                    ),
+                    (
+                        tracked_cx + size,
+                        tracked_cy + size
+                    ),
                     color,
                     2
                 )
 
                 smooth_cx = tracked_cx
                 smooth_cy = tracked_cy
-
-                # Oförändrat: skickar x,y till ESP32
-                data_coord = f"{tracked_cx},{tracked_cy} \n"
-                ser.write(data_coord.encode('utf-8'))
 
             if predicted_cx is not None and lost_counter > 0:
                 cv2.circle(
@@ -280,13 +317,6 @@ def camera_loop():
             latest_jpeg = jpeg.tobytes()
 
 
-# TILLAGT: startar mottagningen från ESP32
-serial_thread = threading.Thread(
-    target=serial_receive_loop,
-    daemon=True
-)
-serial_thread.start()
-
 cam_thread = threading.Thread(
     target=camera_loop,
     daemon=True
@@ -306,8 +336,8 @@ def generate():
         yield (
             b'--frame\r\n'
             b'Content-Type: image/jpeg\r\n\r\n'
-            + frame_bytes
-            + b'\r\n'
+            + frame_bytes +
+            b'\r\n'
         )
 
 
@@ -336,24 +366,17 @@ def video_frame():
 @app.route('/status')
 def status():
     return jsonify({
-        "locked": is_locked,
+        "target": tracked_cx is not None,
         "cx": smooth_cx,
         "cy": smooth_cy,
-        "fps": int(current_fps),
-
-        # TILLAGT
-        "distance_mm": latest_distance_mm,
-        "distance_m": (
-            round(latest_distance_mm / 1000.0, 2)
-            if latest_distance_mm is not None
-            else None
-        )
+        "fps": int(current_fps)
     })
 
 
 @app.route('/unlock', methods=['POST'])
 def unlock():
     global force_unlock
+
     force_unlock = True
 
     return jsonify({
