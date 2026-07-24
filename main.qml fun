@@ -15,6 +15,7 @@ Window {
     title: "Saab System UI"
     color: "#0B0E14"
 
+    property bool autonomous: false
     property bool lockedOn: false
     property var canisters: []
     property bool canister1: false
@@ -850,10 +851,19 @@ Window {
                 client.sendMessage(status)
                 lockTimer.start()
             }
-            else if(status !== "Intro") {
+            else if(status !== "Intro" && status != "idle") {
                 switch(button) {
                 case 0:
                     a = 1
+                    if(!autonomous)
+                    {
+                        autonomous = true
+                    }
+                    else
+                    {
+                        autononmous = false
+                    }
+
                     window.sendUnlock()
                     break
                 case 1: b = 1; break
@@ -866,7 +876,7 @@ Window {
             }
         }
         onButtonReleased: {
-            if (status !== "Intro") {
+            if (status !== "Intro" && status != "idle") {
                 switch(button) {
                 case 0: a = 0; break
                 case 1: b = 0; break
