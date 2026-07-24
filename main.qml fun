@@ -1345,7 +1345,7 @@ Text{
     }
 
     function enterIdle() {
-        if (status != "Intro" && status != "error") {
+        if (status != "Intro" && status != "error" && !autonomous) {
             status = "idle"
             window.isidle = true
             status_light.color = "white"
