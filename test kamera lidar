@@ -12,7 +12,7 @@ picam2 = Picamera2()
 config = picam2.create_video_configuration(main={"size": (640, 480)}, controls={"FrameRate": 60})
 picam2.configure(config)
 picam2.start()
-picam2.set_controls({"ExposureTime": 100, "AnalogueGain": 1.0})
+picam2.set_controls({"ExposureTime": 800, "AnalogueGain": 6.0})
 
 FRAME_W = 640
 FRAME_H = 480
@@ -122,7 +122,11 @@ def camera_loop():
                     search_cx = predicted_cx if predicted_cx is not None else tracked_cx
                     search_cy = predicted_cy if predicted_cy is not None else tracked_cy
 
-                    _, new_cx, new_cy, dist = find_closest_contour(contours, search_cx, search_cy)
+                    _, new_cx, new_cy, dist = find_closest_contour(
+                        contours,
+                        search_cx,
+                        search_cy
+                    )
 
                     if dist < MAX_JUMP:
                         velocity_x = velocity_x * 0.7 + (new_cx - tracked_cx) * 0.3
@@ -164,19 +168,25 @@ def camera_loop():
                 ccx = int(M["m10"] / M["m00"])
                 ccy = int(M["m01"] / M["m00"])
                 size = 20
-                cv2.rectangle(frame,
-                              (ccx - size, ccy - size),
-                              (ccx + size, ccy + size),
-                              (0, 255, 0), 1)
+                cv2.rectangle(
+                    frame,
+                    (ccx - size, ccy - size),
+                    (ccx + size, ccy + size),
+                    (0, 255, 0),
+                    1
+                )
 
-            # Rita tracking-box (röd=locked, gul=söker) ovanpå
+            # Rita grön tracking-box ovanpå
             if tracked_cx is not None and lock_counter > 0:
-                color = (255, 0, 0) if is_locked else (0, 255, 255)
+                color = (0, 255, 0)
                 size = 20
-                cv2.rectangle(frame,
-                              (tracked_cx - size, tracked_cy - size),
-                              (tracked_cx + size, tracked_cy + size),
-                              color, 2)
+                cv2.rectangle(
+                    frame,
+                    (tracked_cx - size, tracked_cy - size),
+                    (tracked_cx + size, tracked_cy + size),
+                    color,
+                    2
+                )
 
                 smooth_cx = tracked_cx
                 smooth_cy = tracked_cy
@@ -185,12 +195,30 @@ def camera_loop():
                 ser.write(data_coord.encode('utf-8'))
 
             if predicted_cx is not None and lost_counter > 0:
-                cv2.circle(frame, (predicted_cx, predicted_cy), 4, (150, 150, 0), 1)
+                cv2.circle(
+                    frame,
+                    (predicted_cx, predicted_cy),
+                    4,
+                    (150, 150, 0),
+                    1
+                )
 
-        cv2.putText(frame, f"FPS: {int(current_fps)}", (8, 18),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 140, 140), 1)
+        cv2.putText(
+            frame,
+            f"FPS: {int(current_fps)}",
+            (8, 18),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (140, 140, 140),
+            1
+        )
 
-        _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        _, jpeg = cv2.imencode(
+            '.jpg',
+            frame,
+            [cv2.IMWRITE_JPEG_QUALITY, 60]
+        )
+
         with jpeg_lock:
             latest_jpeg = jpeg.tobytes()
 
@@ -204,12 +232,20 @@ def generate():
                 time.sleep(0.01)
                 continue
             frame_bytes = latest_jpeg
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+        yield (
+            b'--frame\r\n'
+            b'Content-Type: image/jpeg\r\n\r\n'
+            + frame_bytes
+            + b'\r\n'
+        )
 
 @app.route('/video')
 def video():
-    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    return Response(
+        generate(),
+        mimetype='multipart/x-mixed-replace; boundary=frame'
+    )
 
 @app.route('/video_frame')
 def video_frame():
@@ -217,11 +253,17 @@ def video_frame():
         if latest_jpeg is None:
             return '', 503
         frame_bytes = latest_jpeg
+
     return Response(frame_bytes, mimetype='image/jpeg')
 
 @app.route('/status')
 def status():
-    return jsonify({"locked": is_locked, "cx": smooth_cx, "cy": smooth_cy, "fps": int(current_fps)})
+    return jsonify({
+        "locked": is_locked,
+        "cx": smooth_cx,
+        "cy": smooth_cy,
+        "fps": int(current_fps)
+    })
 
 @app.route('/unlock', methods=['POST'])
 def unlock():
