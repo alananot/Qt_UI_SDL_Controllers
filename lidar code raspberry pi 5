@@ -1,0 +1,402 @@
+#!/usr/bin/env python3
+"""
+LiDAR-server för Raspberry Pi.
+
+Ersätter ESP32/Arduino-koden och ger samma JSON-format till QML.
+
+Standardadress:
+    http://192.168.4.200:8081/distance
+
+LiDAR-protokoll:
+    - Raspberry Pi 5 UART4 på GPIO12/GPIO13: /dev/ttyAMA4
+    - UART: 921600 baud, 8N1
+    - Paket: 16 byte
+    - Header: 0x57 0x00
+    - Checksum: summan av byte 0..14, modulo 256
+    - Status 1 = giltig mätning
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import signal
+import threading
+import time
+from dataclasses import dataclass, asdict
+from typing import Optional
+
+import serial
+from flask import Flask, jsonify, make_response
+
+
+# =====================================================
+# INSTÄLLNINGAR
+# =====================================================
+
+SERIAL_PORT = "/dev/ttyAMA4"
+LIDAR_BAUD = int(os.environ.get("LIDAR_BAUD", "921600"))
+
+WEB_HOST = "0.0.0.0"
+WEB_PORT = 8081
+
+FRAME_LENGTH = 16
+FRAME_HEADER = b"\x57\x00"
+FRESH_LIMIT_MS = 1500
+
+# Samma frågekommando som i Arduino-koden.
+_query_without_checksum = bytes(
+    [0x57, 0x10, 0xFF, 0xFF, 0x00, 0xFF, 0xFF]
+)
+QUERY_COMMAND = _query_without_checksum + bytes(
+    [sum(_query_without_checksum) & 0xFF]
+)
+
+
+# =====================================================
+# LOGGNING
+# =====================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+log = logging.getLogger("lidar-server")
+
+
+# =====================================================
+# MÄTDATA
+# =====================================================
+
+@dataclass
+class LidarMeasurement:
+    valid: bool = False
+    distance_mm: int = 0
+    distance_m: float = 0.0
+    status: int = 0
+    signal_strength: int = 0
+    range_precision: int = 0
+    sensor_id: int = 0
+    last_frame_monotonic: float = 0.0
+
+
+class LidarState:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._measurement = LidarMeasurement()
+        self.serial_connected = False
+        self.serial_error = ""
+
+    def set_serial_state(self, connected: bool, error: str = "") -> None:
+        with self._lock:
+            self.serial_connected = connected
+            self.serial_error = error
+
+    def update_from_frame(self, frame: bytes) -> LidarMeasurement:
+        distance_mm = (
+            frame[8]
+            | (frame[9] << 8)
+            | (frame[10] << 16)
+        )
+
+        status = frame[11]
+        signal_strength = frame[12] | (frame[13] << 8)
+        range_precision = frame[14]
+        sensor_id = frame[3]
+
+        valid = (
+            status == 1
+            and distance_mm > 0
+            and distance_mm < 100000
+        )
+
+        measurement = LidarMeasurement(
+            valid=valid,
+            distance_mm=distance_mm,
+            distance_m=distance_mm / 1000.0,
+            status=status,
+            signal_strength=signal_strength,
+            range_precision=range_precision,
+            sensor_id=sensor_id,
+            last_frame_monotonic=time.monotonic(),
+        )
+
+        with self._lock:
+            self._measurement = measurement
+            self.serial_connected = True
+            self.serial_error = ""
+
+        return measurement
+
+    def snapshot(self) -> dict:
+        now = time.monotonic()
+
+        with self._lock:
+            measurement = LidarMeasurement(
+                **asdict(self._measurement)
+            )
+            serial_connected = self.serial_connected
+            serial_error = self.serial_error
+
+        if measurement.last_frame_monotonic <= 0:
+            age_ms = -1
+            fresh = False
+        else:
+            age_ms = int(
+                (now - measurement.last_frame_monotonic) * 1000
+            )
+            fresh = (
+                measurement.valid
+                and age_ms < FRESH_LIMIT_MS
+            )
+
+        return {
+            # QML behåller samma fältnamn som tidigare.
+            "wifi": True,
+            "valid": fresh,
+            "distance_mm": measurement.distance_mm,
+            "distance_m": round(measurement.distance_m, 3),
+            "status": measurement.status,
+            "signal_strength": measurement.signal_strength,
+            "range_precision": measurement.range_precision,
+            "sensor_id": measurement.sensor_id,
+            "age_ms": age_ms,
+            "serial_connected": serial_connected,
+            "serial_port": SERIAL_PORT,
+            "serial_error": serial_error,
+            "source": "raspberry-pi",
+        }
+
+
+state = LidarState()
+stop_event = threading.Event()
+
+
+# =====================================================
+# LIDAR / UART
+# =====================================================
+
+def checksum_valid(frame: bytes) -> bool:
+    if len(frame) != FRAME_LENGTH:
+        return False
+
+    return (sum(frame[:15]) & 0xFF) == frame[15]
+
+
+def extract_frames(buffer: bytearray):
+    """
+    Tar ut kompletta 16-bytepaket ur en ström av UART-data.
+    Felaktiga byte kastas tills headern 0x57 0x00 hittas.
+    """
+    while True:
+        header_index = buffer.find(FRAME_HEADER)
+
+        if header_index < 0:
+            # Behåll en eventuell ensam 0x57 som kan vara början
+            # på nästa paket.
+            if buffer and buffer[-1] == 0x57:
+                buffer[:] = b"\x57"
+            else:
+                buffer.clear()
+            return
+
+        if header_index > 0:
+            del buffer[:header_index]
+
+        if len(buffer) < FRAME_LENGTH:
+            return
+
+        candidate = bytes(buffer[:FRAME_LENGTH])
+
+        if checksum_valid(candidate):
+            del buffer[:FRAME_LENGTH]
+            yield candidate
+        else:
+            # Checksumfel: flytta ett byte och sök efter nästa header.
+            del buffer[0]
+
+
+def open_serial_port() -> serial.Serial:
+    log.info(
+        "Öppnar LiDAR på %s med %d baud",
+        SERIAL_PORT,
+        LIDAR_BAUD,
+    )
+
+    return serial.Serial(
+        port=SERIAL_PORT,
+        baudrate=LIDAR_BAUD,
+        bytesize=serial.EIGHTBITS,
+        parity=serial.PARITY_NONE,
+        stopbits=serial.STOPBITS_ONE,
+        timeout=0.05,
+        write_timeout=0.5,
+        xonxoff=False,
+        rtscts=False,
+        dsrdtr=False,
+    )
+
+
+def lidar_worker() -> None:
+    serial_port: Optional[serial.Serial] = None
+    receive_buffer = bytearray()
+    last_query_time = 0.0
+    last_print_time = 0.0
+
+    while not stop_event.is_set():
+        try:
+            if serial_port is None or not serial_port.is_open:
+                serial_port = open_serial_port()
+                serial_port.reset_input_buffer()
+                serial_port.reset_output_buffer()
+                state.set_serial_state(True)
+
+                # Skicka första frågan direkt.
+                serial_port.write(QUERY_COMMAND)
+                serial_port.flush()
+                last_query_time = time.monotonic()
+
+                log.info("LiDAR UART startad")
+                log.info("Väntar på paket 0x57 0x00...")
+
+            now = time.monotonic()
+
+            # Behåller samma frågefrekvens som Arduino-koden.
+            if now - last_query_time >= 0.5:
+                serial_port.write(QUERY_COMMAND)
+                serial_port.flush()
+                last_query_time = now
+
+            waiting = serial_port.in_waiting
+            chunk = serial_port.read(waiting if waiting > 0 else 1)
+
+            if chunk:
+                receive_buffer.extend(chunk)
+
+                for frame in extract_frames(receive_buffer):
+                    measurement = state.update_from_frame(frame)
+
+                    if now - last_print_time >= 0.2:
+                        last_print_time = now
+
+                        if measurement.valid:
+                            log.info(
+                                "Avstånd: %d mm | %.3f m | "
+                                "Status: %d | Signal: %d | Precision: %d",
+                                measurement.distance_mm,
+                                measurement.distance_m,
+                                measurement.status,
+                                measurement.signal_strength,
+                                measurement.range_precision,
+                            )
+                        else:
+                            log.warning(
+                                "Ogiltig mätning | Status: %d | "
+                                "Avstånd: %d mm",
+                                measurement.status,
+                                measurement.distance_mm,
+                            )
+
+        except (
+            serial.SerialException,
+            serial.SerialTimeoutException,
+            OSError,
+        ) as error:
+            message = str(error)
+            state.set_serial_state(False, message)
+            log.error("LiDAR/UART-fel: %s", message)
+
+            if serial_port is not None:
+                try:
+                    serial_port.close()
+                except Exception:
+                    pass
+
+            serial_port = None
+            receive_buffer.clear()
+
+            # Försök öppna porten igen efter två sekunder.
+            stop_event.wait(2.0)
+
+        except Exception:
+            log.exception("Oväntat fel i LiDAR-tråden")
+            stop_event.wait(1.0)
+
+    if serial_port is not None:
+        try:
+            serial_port.close()
+        except Exception:
+            pass
+
+
+# =====================================================
+# WEBBSERVER
+# =====================================================
+
+app = Flask(__name__)
+
+
+@app.after_request
+def add_response_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Cache-Control"] = (
+        "no-store, no-cache, must-revalidate, max-age=0"
+    )
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
+@app.get("/")
+def index():
+    return make_response(
+        "Raspberry Pi LiDAR-server. Öppna /distance\n",
+        200,
+    )
+
+
+@app.get("/distance")
+def distance():
+    return jsonify(state.snapshot())
+
+
+@app.get("/status")
+def status():
+    return jsonify(state.snapshot())
+
+
+def request_shutdown(signum, _frame) -> None:
+    log.info("Stoppsignal %s mottagen", signum)
+    stop_event.set()
+
+
+def main() -> None:
+    signal.signal(signal.SIGINT, request_shutdown)
+    signal.signal(signal.SIGTERM, request_shutdown)
+
+    lidar_thread = threading.Thread(
+        target=lidar_worker,
+        name="lidar-uart",
+        daemon=True,
+    )
+    lidar_thread.start()
+
+    log.info(
+        "LiDAR-server startad på http://0.0.0.0:%d/distance",
+        WEB_PORT,
+    )
+
+    try:
+        app.run(
+            host=WEB_HOST,
+            port=WEB_PORT,
+            threaded=True,
+            use_reloader=False,
+        )
+    finally:
+        stop_event.set()
+        lidar_thread.join(timeout=2.0)
+
+
+if __name__ == "__main__":
+    main()
+
