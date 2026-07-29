@@ -1,0 +1,378 @@
+1. Gör SteamOS skrivbart
+
+SteamOS systempartition är normalt skrivskyddad. Kör:
+
+sudo steamos-readonly disable
+
+Det gör att systempaket kan installeras.
+
+
+
+
+Har du inget sudo-lösenord ännu:
+
+passwd
+
+
+
+2. Installera C- och C++-kompilatorn
+sudo pacman -S --needed gcc
+
+Det installerar:
+
+/usr/bin/gcc
+/usr/bin/g++
+
+Kontrollera:
+
+command -v gcc
+command -v g++
+gcc --version
+g++ --version
+
+Du ska få:
+
+/usr/bin/gcc
+/usr/bin/g++
+
+
+
+
+3. Återställ systemets headerfiler
+
+Om kompilatorn ger ett fel som:
+
+fatal error: features.h: No such file or directory
+
+kör:
+
+sudo pacman -S glibc linux-api-headers
+
+Kontrollera:
+
+ls -l /usr/include/features.h
+
+Testa sedan kompilatorn:
+
+printf '#include <iostream>\nint main(){std::cout<<"OK\\n";}\n' > /tmp/test.cpp
+g++ /tmp/test.cpp -o /tmp/test && /tmp/test
+
+När allt fungerar visas:
+
+OK
+
+
+
+
+4. Installera byggverktyget Make
+
+Om CMake säger:
+
+CMake was unable to find a build program corresponding to "Unix Makefiles"
+
+kör:
+
+sudo pacman -S --needed make
+
+Kontrollera:
+
+command -v make
+make --version
+
+Du ska få:
+
+/usr/bin/make
+
+
+
+
+5. Installera OpenGL-filer
+
+Om CMake säger:
+
+Could NOT find OpenGL
+missing: OPENGL_INCLUDE_DIR
+
+kör:
+
+sudo pacman -S libglvnd mesa
+
+Det går bra att installera om paketen även om de redan finns.
+
+Kontrollera:
+
+ls -l /usr/include/GL/gl.h
+ls -l /usr/lib/libOpenGL.so
+
+Båda kommandona ska visa en fil.
+
+
+
+
+
+6. Installera SDL2
+
+Om CMake säger:
+
+Could not find SDL2Config.cmake
+
+kör:
+
+sudo pacman -S --needed sdl2-compat
+
+Kontrollera SDL2:
+
+ls -l /usr/lib/cmake/SDL2/SDL2Config.cmake
+ls -l /usr/include/SDL2/SDL.h
+ls -l /usr/lib/libSDL2.so
+
+Om ett paket redan är installerat men filer saknas, installera om det:
+
+sudo pacman -S sdl2-compat
+
+
+
+
+
+
+
+
+6. Installera SDL2
+
+Om CMake säger:
+
+Could not find SDL2Config.cmake
+
+kör:
+
+sudo pacman -S --needed sdl2-compat
+
+Kontrollera SDL2:
+
+ls -l /usr/lib/cmake/SDL2/SDL2Config.cmake
+ls -l /usr/include/SDL2/SDL.h
+ls -l /usr/lib/libSDL2.so
+
+Om ett paket redan är installerat men filer saknas, installera om det:
+
+sudo pacman -S sdl2-compat
+
+
+
+
+
+Rensa projektets trasiga byggfiler
+
+Gå till projektmappen:
+
+cd /home/deck/Qt_UI_SDL_Controllers
+
+Radera endast den genererade build-mappen:
+
+rm -rf build
+
+Det raderar inte din QML- eller C++-kod.
+
+Vid större problem kan du även återställa Qt Creators projektinställningar:
+
+rm -f CMakeLists.txt.user
+rm -rf .qtcreator
+
+Detta raderar inte källkoden, men Qt Creator glömmer valt Kit och projektets lokala inställningar.
+
+Radera aldrig hela denna mapp:
+
+/home/deck/Qt_UI_SDL_Controllers
+
+
+
+
+
+
+
+Konfigurera projektet manuellt
+
+Kör:
+
+cd /home/deck/Qt_UI_SDL_Controllers
+rm -rf build
+
+/home/deck/Qt/Tools/CMake/bin/cmake \
+  -S . \
+  -B build \
+  -DCMAKE_PREFIX_PATH=/home/deck/Qt/6.11.1/gcc_64 \
+  -DCMAKE_C_COMPILER=/usr/bin/gcc \
+  -DCMAKE_CXX_COMPILER=/usr/bin/g++
+
+Förklaring:
+
+-S .                  = källkoden finns i aktuell mapp
+-B build              = byggfiler läggs i mappen build
+CMAKE_PREFIX_PATH     = visar var Qt 6.11.1 finns
+CMAKE_C_COMPILER      = väljer GCC för C
+CMAKE_CXX_COMPILER    = väljer G++ för C++
+
+När det lyckas ska slutet säga:
+
+-- Configuring done
+-- Generating done
+-- Build files have been written to:
+
+En varning om:
+
+Could NOT find WrapVulkanHeaders
+
+kan normalt ignoreras om konfigureringen ändå fortsätter och avslutas med Generating done.
+
+
+
+
+
+
+
+Konfigurera projektet manuellt
+
+Kör:
+
+cd /home/deck/Qt_UI_SDL_Controllers
+rm -rf build
+
+/home/deck/Qt/Tools/CMake/bin/cmake \
+  -S . \
+  -B build \
+  -DCMAKE_PREFIX_PATH=/home/deck/Qt/6.11.1/gcc_64 \
+  -DCMAKE_C_COMPILER=/usr/bin/gcc \
+  -DCMAKE_CXX_COMPILER=/usr/bin/g++
+
+Förklaring:
+
+-S .                  = källkoden finns i aktuell mapp
+-B build              = byggfiler läggs i mappen build
+CMAKE_PREFIX_PATH     = visar var Qt 6.11.1 finns
+CMAKE_C_COMPILER      = väljer GCC för C
+CMAKE_CXX_COMPILER    = väljer G++ för C++
+
+När det lyckas ska slutet säga:
+
+-- Configuring done
+-- Generating done
+-- Build files have been written to:
+
+En varning om:
+
+Could NOT find WrapVulkanHeaders
+
+kan normalt ignoreras om konfigureringen ändå fortsätter och avslutas med Generating done.
+
+
+
+
+
+
+
+Ställ in Qt Creator
+
+Öppna:
+
+Edit → Preferences → Kits → Compilers
+
+Tryck:
+
+Re-detect
+
+Kontrollera att Qt Creator hittar:
+
+/usr/bin/gcc
+/usr/bin/g++
+
+Gå sedan till:
+
+Edit → Preferences → Kits → Kits
+
+Välj:
+
+Desktop Qt 6.11.1
+
+På raden Compiler väljer du:
+
+GCC (x86 64bit at "/usr/bin/gcc")
+
+Kontrollera också:
+
+Qt version: Qt 6.11.1
+Debugger: System GDB at /usr/bin/gdb
+
+Tryck:
+
+Apply
+OK
+
+
+
+
+
+Konfigurera projektet i Qt Creator
+
+Öppna projektets:
+
+/home/deck/Qt_UI_SDL_Controllers/CMakeLists.txt
+
+Välj:
+
+Desktop Qt 6.11.1
+
+Gå sedan till:
+
+Build → Clear CMake Configuration
+
+Därefter:
+
+Build → Run CMake
+
+Bygg projektet:
+
+Ctrl+B
+
+Om projektet visas som Unconfigured, använd:
+
+Build → Open Build and Run Kit Selector
+
+och välj Desktop Qt 6.11.1.
+
+
+
+
+
+
+Röda QML-importfel
+
+Felen:
+
+import SDL 1.0
+import Networking 1.0
+
+och ibland även:
+
+import QtQuick
+import QtQuick.Controls
+
+är ofta följdfel när CMake inte är konfigurerat.
+
+Ändra inte importerna direkt. Reparera först:
+
+GCC/G++
+systemheaders
+Make
+OpenGL
+SDL2
+Qt Creator Kit
+CMake-konfigurationen
+
+När projektet har byggts ska importfelen normalt försvinna.
+
+Slå på SteamOS skrivskydd igen
+
+När allt fungerar:
+
+sudo steamos-readonly enable
+
