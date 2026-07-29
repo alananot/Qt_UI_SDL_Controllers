@@ -110,30 +110,6 @@ Båda kommandona ska visa en fil.
 
 
 
-6. Installera SDL2
-
-Om CMake säger:
-
-Could not find SDL2Config.cmake
-
-kör:
-
-sudo pacman -S --needed sdl2-compat
-
-Kontrollera SDL2:
-
-ls -l /usr/lib/cmake/SDL2/SDL2Config.cmake
-ls -l /usr/include/SDL2/SDL.h
-ls -l /usr/lib/libSDL2.so
-
-Om ett paket redan är installerat men filer saknas, installera om det:
-
-sudo pacman -S sdl2-compat
-
-
-
-
-
 
 
 
