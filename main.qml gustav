@@ -15,6 +15,7 @@ Window {
     title: "Saab System UI"
     color: "#0B0E14"
 
+    property bool autonomous: false
     property bool lockedOn: false
     property var canisters: []
     property bool canister1: false
@@ -22,9 +23,29 @@ Window {
     property bool canister3: false
     property int targetX: 0
     property int targetY: 0
-    property int speed: 0
+
+    // Raspberry Pi på ESP32-nätet.
+    // Kameran använder port 8080 och LiDARn port 8081.
+    property string lidarUrl: "http://192.168.4.200:8081/distance"
+
+    property bool lidarConnected: false
+    property bool lidarValid: false
+    property bool lidarRequestPending: false
+    property var lidarActiveRequest: null
+    property double lidarRequestStartedAt: 0
+    property int lidarDistanceMm: 0
+    property real lidarDistanceM: 0.0
+    property int lidarStatus: 0
+    property int lidarHttpStatus: 0
+    property int lidarRequestCount: 0
+    property string lidarMessage: "CONNECTING TO LIDAR"
+    property bool targetDistanceValid: lidarConnected && lidarValid
     property real socketValue: 0.0
     property real socketValue2: 0.0
+    property real socketValue3: 0.0
+    property real socketValue4: 0.0
+    property real socketValue5: 0.0
+    property real socketValue6: 0.0
     property string status: "Intro"
     property bool isidle: false
     property int a: 0
@@ -50,6 +71,8 @@ Window {
     property bool mMid: true
     property bool mRight: true
     property bool everOperative: false
+    property bool cameraServerActive: false
+    property bool cameraCommandPending: false
 
     function sendUnlock() {
         var xhr = new XMLHttpRequest()
@@ -57,9 +80,60 @@ Window {
         xhr.send()
     }
 
+
+    function setCameraIdle(idleState) {
+        // Stoppa bildhämtningen direkt när idle börjar.
+        if (idleState)
+            window.cameraServerActive = false
+
+        window.cameraCommandPending = true
+
+        var xhr = new XMLHttpRequest()
+        var endpoint = idleState ? "/camera/idle" : "/camera/connect"
+
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState !== XMLHttpRequest.DONE)
+                return
+
+            window.cameraCommandPending = false
+
+            if (xhr.status === 200) {
+                window.cameraServerActive = !idleState
+
+                if (!idleState) {
+                    turretItem.cameraReady = false
+                    feedTimer.waitingForLoad = false
+                }
+            } else {
+                window.cameraServerActive = false
+
+                // Försök igen om kameran skulle misslyckas att starta.
+                if (!idleState && !window.isidle)
+                    cameraConnectRetry.restart()
+            }
+        }
+
+        xhr.open(
+            "POST",
+            "http://192.168.4.200:8080" + endpoint,
+            true
+        )
+        xhr.send()
+    }
+
+    Timer {
+        id: cameraConnectRetry
+        interval: 500
+        repeat: false
+        onTriggered: {
+            if (!window.isidle && !window.cameraServerActive)
+                window.setCameraIdle(false)
+        }
+    }
+
     Timer {
         interval: 80
-        running: true
+        running: !window.isidle && window.cameraServerActive
         repeat: true
         onTriggered: {
             var xhr = new XMLHttpRequest()
@@ -76,15 +150,173 @@ Window {
         }
     }
 
+
+    function readLidarDistance() {
+        // Läs endast när systemet är connected/operative,
+        // kameran är aktiv och target är låst.
+        var systemConnected =
+                window.status === "Operative" &&
+                !window.isidle &&
+                window.cameraServerActive
+
+        if (!systemConnected || !window.lockedOn) {
+            window.lidarConnected = false
+            window.lidarValid = false
+            window.lidarDistanceMm = 0
+            window.lidarDistanceM = 0.0
+            window.lidarStatus = 0
+            window.lidarMessage = systemConnected
+                    ? "WAITING FOR LOCK"
+                    : "WAITING FOR CONNECTION"
+            return
+        }
+
+        // Starta aldrig ett nytt HTTP-anrop innan det förra är klart.
+        if (window.lidarRequestPending)
+            return
+
+        window.lidarRequestPending = true
+        window.lidarRequestStartedAt = Date.now()
+        window.lidarRequestCount += 1
+
+        var xhr = new XMLHttpRequest()
+        window.lidarActiveRequest = xhr
+
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState !== XMLHttpRequest.DONE)
+                return
+
+            window.lidarRequestPending = false
+            window.lidarActiveRequest = null
+            window.lidarHttpStatus = xhr.status
+
+            if (xhr.status !== 200) {
+                window.lidarConnected = false
+                window.lidarValid = false
+                window.lidarMessage = "NO CONNECTION"
+                return
+            }
+
+            try {
+                var data = JSON.parse(xhr.responseText)
+                var distance = Number(data.distance_mm)
+                var statusValue = Number(data.status)
+
+                window.lidarConnected = true
+                window.lidarStatus = statusValue
+                window.lidarValid =
+                        data.valid === true &&
+                        statusValue === 1 &&
+                        isFinite(distance) &&
+                        distance > 0
+
+                if (window.lidarValid) {
+                    window.lidarDistanceMm = Math.round(distance)
+                    window.lidarDistanceM =
+                            window.lidarDistanceMm / 1000.0
+                    window.lidarMessage = "LIDAR ONLINE"
+                } else {
+                    window.lidarMessage = "INVALID DISTANCE"
+                }
+            } catch (error) {
+                window.lidarConnected = false
+                window.lidarValid = false
+                window.lidarMessage = "JSON ERROR"
+            }
+        }
+
+        xhr.open(
+            "GET",
+            window.lidarUrl + "?t=" + Date.now(),
+            true
+        )
+        xhr.send()
+    }
+
+    // 4 avläsningar per sekund räcker för UI och belastar inte nätverket.
+    Timer {
+        id: lidarTimer
+        interval: 250
+        running: window.status === "Operative" &&
+                 !window.isidle &&
+                 window.cameraServerActive
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: window.readLidarDistance()
+    }
+
+    // Om ett anrop fastnar, avbryt efter 1 sekund.
+    Timer {
+        id: lidarTimeoutTimer
+        interval: 100
+        running: true
+        repeat: true
+
+        onTriggered: {
+            if (!window.lidarRequestPending)
+                return
+
+            if (Date.now() - window.lidarRequestStartedAt < 1000)
+                return
+
+            var request = window.lidarActiveRequest
+            window.lidarActiveRequest = null
+            window.lidarRequestPending = false
+            window.lidarConnected = false
+            window.lidarValid = false
+            window.lidarMessage = "LIDAR TIMEOUT"
+
+            if (request !== null) {
+                try {
+                    request.abort()
+                } catch (error) {
+                }
+            }
+        }
+    }
+
     TcpClient {
         id: tcpGraph
         property string network: ""
         onConnected: console.log("Connected to server")
         onMessageRecieved: {
+
             network += msg
             if(network.indexOf("\n") !== -1){
                 let cleanValue = network.replace("\r","").replace("\n","")
-                socketValue = parseFloat(cleanValue)
+                let values = cleanValue.split(",")
+                for(let i = 0; i < values.length; i++)
+
+                {
+                     let val = parseFloat(values[i].trim())
+                    switch(i)
+                    {
+                    case 0:
+                        socketValue = val
+                        break;
+
+                    case 1:
+                        socketValue2 = val
+                        break;
+                    case 2:
+                        socketValue3 = val
+                        break;
+                    case 3:
+                        socketValue4 = val
+                        break;
+                    case 4:
+                        socketValue5 = val
+                        break;
+                    case 5:
+                        socketValue6 = val
+                        break;
+                     }
+
+
+
+                }
+
+
                 network = ""
             }
         }
@@ -373,6 +605,7 @@ Window {
                 status = "Operative"
                 status_light.color = "green"
                 client.sendMessage(status)
+                window.setCameraIdle(false)
                 is_idle_time.start()
                 moved_timer.start()
             }
@@ -485,7 +718,7 @@ Window {
     }
 
     Rectangle {
-        id: speedPanel
+        id: distancePanel
         anchors.right: parent.right
         anchors.top: topBar.bottom
         anchors.bottom: parent.bottom
@@ -494,61 +727,99 @@ Window {
         anchors.bottomMargin: 10
         width: 300
         color: "#1A2333"
-        border.color: "#3A4A66"
+        border.color: !window.lockedOn ? "#FFCC00" : (window.targetDistanceValid ? "#00FF88" : "#FF5555")
         border.width: 2
         radius: 4
 
         Column {
             anchors.centerIn: parent
-            spacing: 20
+            spacing: 18
 
             Text {
-                text: "SPEED"
+                text: "TARGET DISTANCE"
                 font.pixelSize: 13
+                font.bold: true
+                font.family: "Eurostile"
+                color: "#AFC7FF"
+                opacity: 0.7
+                anchors.horizontalCenter: parent.horizontalCenter
+                font.letterSpacing: 3
+            }
+
+            Rectangle {
+                width: 24
+                height: 24
+                radius: 12
+                anchors.horizontalCenter: parent.horizontalCenter
+                color: window.targetDistanceValid ? "#00FF88" : "#FF5555"
+
+                SequentialAnimation on opacity {
+                    running: !window.targetDistanceValid
+                    loops: Animation.Infinite
+                    NumberAnimation { from: 0.35; to: 1.0; duration: 500 }
+                    NumberAnimation { from: 1.0; to: 0.35; duration: 500 }
+                }
+            }
+
+            Text {
+                text: window.lockedOn && window.targetDistanceValid
+                      ? window.lidarDistanceM.toFixed(3)
+                      : "---"
+                font.pixelSize: 72
+                font.bold: true
+                font.family: "Eurostile"
+                color: window.targetDistanceValid ? "#D6E1FF" : "#6A7A99"
+                anchors.horizontalCenter: parent.horizontalCenter
+            }
+
+            Text {
+                text: "m"
+                font.pixelSize: 18
                 font.bold: true
                 font.family: "Eurostile"
                 color: "#AFC7FF"
                 opacity: 0.6
                 anchors.horizontalCenter: parent.horizontalCenter
-                font.letterSpacing: 3
-            }
-
-            Text {
-                text: window.speed
-                font.pixelSize: 80
-                font.bold: true
-                font.family: "Eurostile"
-                color: "#D6E1FF"
-                anchors.horizontalCenter: parent.horizontalCenter
-            }
-
-            Text {
-                text: "km/h"
-                font.pixelSize: 16
-                font.bold: true
-                font.family: "Eurostile"
-                color: "#AFC7FF"
-                opacity: 0.5
-                anchors.horizontalCenter: parent.horizontalCenter
                 font.letterSpacing: 2
             }
 
             Rectangle {
-                width: 220; height: 6; radius: 3
+                width: 240
+                height: 54
+                radius: 4
                 anchors.horizontalCenter: parent.horizontalCenter
                 color: "#0B0E14"
-                border.color: "#2A3A55"
-                border.width: 1
-                Rectangle {
-                    height: parent.height
-                    width: Math.min(parent.width, window.speed / 120 * parent.width)
-                    radius: 3
-                    gradient: Gradient {
-                        orientation: Gradient.Horizontal
-                        GradientStop { position: 0.0; color: "#AFC7FF" }
-                        GradientStop { position: 1.0; color: "#00CFFF" }
-                    }
+                border.color: !window.lockedOn ? "#FFCC00" : (window.targetDistanceValid ? "#00FF88" : "#FF5555")
+                border.width: 2
+
+                Text {
+                    anchors.centerIn: parent
+                    text: !window.lockedOn
+                          ? "WAITING FOR LOCK"
+                          : (window.targetDistanceValid
+                             ? window.lidarDistanceMm + " mm"
+                             : window.lidarMessage)
+                    color: window.targetDistanceValid ? "#00FF88" : "#FF7777"
+                    font.pixelSize: 16
+                    font.bold: true
+                    font.family: "Eurostile"
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
                 }
+            }
+
+            Text {
+                text: !window.lockedOn
+                      ? "WAITING FOR LOCK"
+                      : (window.lidarConnected
+                         ? "LIDAR ONLINE"
+                         : window.lidarMessage)
+                color: "#6A7A99"
+                font.pixelSize: 11
+                font.bold: true
+                font.family: "Eurostile"
+                anchors.horizontalCenter: parent.horizontalCenter
+                horizontalAlignment: Text.AlignHCenter
             }
         }
     }
@@ -556,7 +827,7 @@ Window {
     Item {
         id: turretItem
         anchors.left: statesPanel.right
-        anchors.right: speedPanel.left
+        anchors.right: distancePanel.left
         anchors.top: topBar.bottom
         anchors.bottom: parent.bottom
         anchors.margins: 10
@@ -608,7 +879,7 @@ Window {
         Timer {
             id: feedTimer
             interval: 33
-            running: true
+            running: !window.isidle && window.cameraServerActive
             repeat: true
             property bool waitingForLoad: false
             onTriggered: {
@@ -628,7 +899,7 @@ Window {
             anchors.fill: parent
             radius: 4
             color: "#0B0E14"
-            visible: !turretItem.cameraReady
+            visible: window.isidle || !turretItem.cameraReady
             z: 10
 
             Canvas {
@@ -665,6 +936,42 @@ Window {
                         running: cameraLoading.visible
                         NumberAnimation { from: 0.35; to: 1.0; duration: 700 }
                         NumberAnimation { from: 1.0; to: 0.35; duration: 700 }
+                    }
+                }
+            }
+        }
+
+        Connections {
+            target: window
+
+            function onIsidleChanged() {
+                feedTimer.waitingForLoad = false
+                turretItem.cameraReady = false
+                feed1.source = ""
+                feed2.source = ""
+
+                if (window.isidle) {
+                    // Glöm gammal target-lock direkt när idle börjar.
+                    window.lockedOn = false
+                    window.targetX = 0
+                    window.targetY = 0
+
+                    // Stoppa och nollställ eventuell pågående LiDAR-avläsning.
+                    var request = window.lidarActiveRequest
+                    window.lidarActiveRequest = null
+                    window.lidarRequestPending = false
+                    window.lidarConnected = false
+                    window.lidarValid = false
+                    window.lidarDistanceMm = 0
+                    window.lidarDistanceM = 0.0
+                    window.lidarStatus = 0
+                    window.lidarMessage = "WAITING FOR CONNECTION"
+
+                    if (request !== null) {
+                        try {
+                            request.abort()
+                        } catch (error) {
+                        }
                     }
                 }
             }
@@ -813,10 +1120,19 @@ Window {
                 client.sendMessage(status)
                 lockTimer.start()
             }
-            else if(status !== "Intro") {
+            else if(status !== "Intro" && status != "idle") {
                 switch(button) {
                 case 0:
                     a = 1
+                    if(!autonomous)
+                    {
+                        autonomous = true
+                    }
+                    else
+                    {
+                        autonomous = false
+                    }
+
                     window.sendUnlock()
                     break
                 case 1: b = 1; break
@@ -829,7 +1145,7 @@ Window {
             }
         }
         onButtonReleased: {
-            if (status !== "Intro") {
+            if (status !== "Intro" && status != "idle") {
                 switch(button) {
                 case 0: a = 0; break
                 case 1: b = 0; break
@@ -916,7 +1232,7 @@ Window {
 
             Button {
                 id: idleButton
-                text: "IDLE"
+                text: "IDLE_SPIN"
                 width: 220
                 height: 58
                 font.pixelSize: 22
@@ -936,7 +1252,11 @@ Window {
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                 }
-                onClicked: enterIdle()
+                onClicked: {
+                    {
+                    tcpButtons.sendMessage(0+ ","+0+","+0+","+0+","+0+","+0)
+                    }
+                }
             }
 
             Button {
@@ -1023,6 +1343,35 @@ Window {
             font.letterSpacing: 6
             color: "#AFC7FF"
         }
+Text{
+            text: socketValue
+            color:"white"
+        }
+        Text{
+            text:socketValue2
+            color:"white"
+            x:200
+        }
+        Text{
+            text:socketValue3
+            color:"white"
+            x:400
+        }
+        Text{
+            text:socketValue4
+            color:"white"
+            x:600
+        }
+        Text{
+            text:socketValue5
+            color:"white"
+            x:800
+        }
+        Text{
+            text: socketValue6
+            color:"white"
+            x:1000
+        }
 
         Grid {
             anchors.top: debugTitle.bottom
@@ -1063,7 +1412,33 @@ Window {
                             width: 360
                             height: 210
                             lineColor: modelData.color
-                            dataValue: index % 2 === 0 ? window.socketValue : window.socketValue2
+                            dataValue: {
+                                switch(index)
+                                {
+                                case 0:
+                                    socketValue
+                                    break;
+                                case 1:
+                                    socketValue2
+                                    break;
+                                case 2:
+                                    socketValue3
+                                    break;
+                                case 3:
+                                    socketValue4
+                                    break;
+                                case 4:
+                                    socketValue5
+                                    break;
+                                case 5:
+                                    socketValue6
+                                    break;
+                                }
+
+                               // index % 2 === 0 ? window.socketValue : window.
+
+
+                        }
                         }
                     }
                 }
@@ -1221,7 +1596,7 @@ Window {
 
     Timer {
         id: is_idle_time
-        interval: 300000
+        interval: 15000
         repeat: false
         onTriggered: enterIdle()
     }
@@ -1243,16 +1618,24 @@ Window {
     }
 
     function enterIdle() {
-        if (status != "Intro" && status != "error") {
+        if (status != "Intro" && status != "error" && !autonomous) {
             status = "idle"
             window.isidle = true
             status_light.color = "white"
+            window.setCameraIdle(true)
             idle.start()
         }
     }
 
     function reset_idle() {
+        var wasIdle = window.isidle
         window.isidle = false
+
+        if (wasIdle) {
+            status = "Operative"
+            window.setCameraIdle(false)
+        }
+
         if (status != "Intro" && status != "error") {
             status_light.color = "green"
         } else if (status == "error") {
