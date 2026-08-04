@@ -562,10 +562,8 @@ Window {
             return
         }
 
-        // Stoppa bildhämtningen direkt när idle börjar.
-        if (idleState)
-            window.cameraServerActive = false
-
+        // Kameraservern och kamerabilden ska fortsätta vara aktiva i IDLE.
+        // Endpointen anropas fortfarande för kompatibilitet med servern.
         window.cameraCommandPending = true
 
         var xhr = new XMLHttpRequest()
@@ -578,18 +576,11 @@ Window {
             window.cameraCommandPending = false
 
             if (xhr.status === 200) {
-                window.cameraServerActive = !idleState
-
-                if (!idleState) {
-                    turretItem.cameraReady = false
-                    feedTimer.waitingForLoad = false
-                }
+                window.cameraServerActive = true
+                feedTimer.waitingForLoad = false
             } else {
                 window.cameraServerActive = false
-
-                // Försök igen om kameran skulle misslyckas att starta.
-                if (!idleState && !window.isidle)
-                    cameraConnectRetry.restart()
+                cameraConnectRetry.restart()
             }
         }
 
@@ -1134,7 +1125,7 @@ Window {
             id: client
             property string modeBuffer: ""
             property string ammoBuffer: ""
-    
+
             onConnected: {
                 window.everOperative = true
                 intro_lamp.color = "green"
@@ -1654,7 +1645,7 @@ Window {
                 height: 320
                 radius: 6
                 color: "#08131C"
-                border.color: window.trackingDataVisible
+                border.color: window.lockedOn
                               ? window.uiRed
                               : window.uiYellow
                 border.width: 1
@@ -1664,10 +1655,10 @@ Window {
                     anchors.leftMargin: 12
                     anchors.top: parent.top
                     anchors.topMargin: 10
-                    text: window.trackingDataVisible
+                    text: window.lockedOn
                           ? "TARGET LOCKED"
                           : "SEARCHING"
-                    color: window.trackingDataVisible
+                    color: window.lockedOn
                            ? window.uiRed
                            : window.uiYellow
                     font.pixelSize: 12
@@ -1681,8 +1672,8 @@ Window {
                     anchors.rightMargin: 12
                     anchors.top: parent.top
                     anchors.topMargin: 10
-                    text: "±90° / " +
-                          window.lidarMaxRangeM.toFixed(0) + " m"
+                    text: window.targetFrameWidth + " × " +
+                          window.targetFrameHeight
                     color: window.uiMuted
                     font.pixelSize: 10
                     font.bold: true
@@ -1692,12 +1683,23 @@ Window {
                 Canvas {
                     id: lidarScopeCanvas
                     anchors.fill: parent
-                    anchors.leftMargin: 10
-                    anchors.rightMargin: 10
-                    anchors.topMargin: 34
-                    anchors.bottomMargin: 10
+                    anchors.leftMargin: 12
+                    anchors.rightMargin: 12
+                    anchors.topMargin: 36
+                    anchors.bottomMargin: 12
                     antialiasing: true
 
+                    property real sweepAngle: 0
+
+                    NumberAnimation on sweepAngle {
+                        from: 0
+                        to: 360
+                        duration: 2400
+                        loops: Animation.Infinite
+                        running: true
+                    }
+
+                    onSweepAngleChanged: requestPaint()
                     onWidthChanged: requestPaint()
                     onHeightChanged: requestPaint()
                     Component.onCompleted: requestPaint()
@@ -1706,165 +1708,218 @@ Window {
                         var ctx = getContext("2d")
                         ctx.clearRect(0, 0, width, height)
 
-                        var cx = width / 2
-                        var cy = height - 16
-                        var maxRadius = Math.min(
-                                    width / 2 - 12,
-                                    height - 28
-                                )
+                        var margin = 8
+                        var left = margin
+                        var top = margin
+                        var scopeWidth = width - margin * 2
+                        var scopeHeight = height - margin * 2
+                        var centerX = left + scopeWidth / 2
+                        var centerY = top + scopeHeight / 2
 
-                        var stateColor =
-                                window.trackingDataVisible
+                        var stateColor = window.lockedOn
                                 ? "#E61417"
                                 : "#FAB900"
 
-                        var normalizedDistance =
-                                window.trackingDataVisible
-                                ? Math.max(
-                                      0,
-                                      Math.min(
-                                          1,
-                                          window.lidarDistanceM /
-                                          window.lidarMaxRangeM
-                                      )
-                                  )
-                                : 0
-                        var filledRadius =
-                                maxRadius * normalizedDistance
+                        // Fyrkantig radargrund.
+                        ctx.fillStyle = "rgba(5,18,27,0.95)"
+                        ctx.fillRect(left, top, scopeWidth, scopeHeight)
 
-                        ctx.fillStyle =
-                                window.trackingDataVisible
-                                ? "rgba(230,20,23,0.16)"
-                                : "rgba(250,185,0,0.20)"
-                        ctx.beginPath()
-                        ctx.moveTo(cx, cy)
-                        ctx.arc(
-                            cx,
-                            cy,
-                            filledRadius,
-                            Math.PI,
-                            Math.PI * 2
-                        )
-                        ctx.closePath()
-                        ctx.fill()
+                        ctx.strokeStyle = "rgba(145,155,155,0.50)"
+                        ctx.lineWidth = 1
+                        ctx.strokeRect(left, top, scopeWidth, scopeHeight)
 
-                        ctx.strokeStyle =
-                                window.trackingDataVisible
-                                ? "rgba(230,20,23,0.52)"
-                                : "rgba(250,185,0,0.52)"
+                        // Rutnät.
+                        ctx.strokeStyle = "rgba(145,155,155,0.20)"
                         ctx.lineWidth = 1
 
-                        for (var ring = 1; ring <= 4; ++ring) {
-                            var rr = maxRadius * ring / 4
+                        for (var gx = 1; gx < 8; ++gx) {
+                            var gridX = left + scopeWidth * gx / 8
                             ctx.beginPath()
-                            ctx.arc(
-                                cx,
-                                cy,
-                                rr,
-                                Math.PI,
-                                Math.PI * 2
-                            )
+                            ctx.moveTo(gridX, top)
+                            ctx.lineTo(gridX, top + scopeHeight)
                             ctx.stroke()
-
-                            ctx.fillStyle = "rgba(237,242,244,0.70)"
-                            ctx.font = "10px sans-serif"
-                            ctx.textAlign = "center"
-                            ctx.fillText(
-                                (window.lidarMaxRangeM * ring / 4)
-                                    .toFixed(1) + "m",
-                                cx,
-                                cy - rr + 11
-                            )
                         }
 
-                        ctx.strokeStyle = "rgba(145,155,155,0.65)"
+                        for (var gy = 1; gy < 6; ++gy) {
+                            var gridY = top + scopeHeight * gy / 6
+                            ctx.beginPath()
+                            ctx.moveTo(left, gridY)
+                            ctx.lineTo(left + scopeWidth, gridY)
+                            ctx.stroke()
+                        }
+
+                        // Mittlinjer och mittpunkt.
+                        ctx.strokeStyle = "rgba(237,242,244,0.48)"
+                        ctx.lineWidth = 1
+
                         ctx.beginPath()
-                        ctx.moveTo(cx - maxRadius, cy)
-                        ctx.lineTo(cx + maxRadius, cy)
+                        ctx.moveTo(centerX, top)
+                        ctx.lineTo(centerX, top + scopeHeight)
                         ctx.stroke()
 
-                        var angles = [-90, -60, -30, 0, 30, 60, 90]
+                        ctx.beginPath()
+                        ctx.moveTo(left, centerY)
+                        ctx.lineTo(left + scopeWidth, centerY)
+                        ctx.stroke()
 
-                        for (var i = 0; i < angles.length; ++i) {
-                            var angleDeg = angles[i]
-                            var angleRad = angleDeg * Math.PI / 180
-                            var ex = cx + Math.sin(angleRad) * maxRadius
-                            var ey = cy - Math.cos(angleRad) * maxRadius
+                        ctx.fillStyle = "#EDF2F4"
+                        ctx.beginPath()
+                        ctx.arc(centerX, centerY, 4, 0, Math.PI * 2)
+                        ctx.fill()
 
-                            ctx.strokeStyle =
-                                    "rgba(145,155,155,0.34)"
-                            ctx.beginPath()
-                            ctx.moveTo(cx, cy)
-                            ctx.lineTo(ex, ey)
-                            ctx.stroke()
+                        ctx.strokeStyle = "#EDF2F4"
+                        ctx.beginPath()
+                        ctx.arc(centerX, centerY, 10, 0, Math.PI * 2)
+                        ctx.stroke()
 
-                            ctx.fillStyle = "rgba(237,242,244,0.68)"
-                            ctx.font = "10px sans-serif"
-                            ctx.textAlign = "center"
+                        // Roterande radarsvep från mitten.
+                        var angleRad =
+                                (lidarScopeCanvas.sweepAngle - 90) *
+                                Math.PI / 180
+                        var dx = Math.cos(angleRad)
+                        var dy = Math.sin(angleRad)
+                        var edgeScale = Math.min(
+                                    Math.abs(scopeWidth / 2 /
+                                             (Math.abs(dx) < 0.0001
+                                              ? 0.0001
+                                              : dx)),
+                                    Math.abs(scopeHeight / 2 /
+                                             (Math.abs(dy) < 0.0001
+                                              ? 0.0001
+                                              : dy))
+                                )
+                        var sweepX = centerX + dx * edgeScale
+                        var sweepY = centerY + dy * edgeScale
 
-                            var labelX = cx +
-                                    Math.sin(angleRad) *
-                                    (maxRadius + 5)
-                            var labelY = cy -
-                                    Math.cos(angleRad) *
-                                    (maxRadius + 5)
+                        var gradient = ctx.createLinearGradient(
+                                    centerX,
+                                    centerY,
+                                    sweepX,
+                                    sweepY
+                                )
+                        gradient.addColorStop(
+                                    0,
+                                    "rgba(56,201,139,0.08)"
+                                )
+                        gradient.addColorStop(
+                                    1,
+                                    "rgba(56,201,139,0.80)"
+                                )
 
-                            ctx.fillText(
-                                angleDeg + "°",
-                                labelX,
-                                angleDeg === -90 ||
-                                angleDeg === 90
-                                    ? labelY - 2
-                                    : labelY + 4
-                            )
-                        }
+                        ctx.strokeStyle = gradient
+                        ctx.lineWidth = 2
+                        ctx.beginPath()
+                        ctx.moveTo(centerX, centerY)
+                        ctx.lineTo(sweepX, sweepY)
+                        ctx.stroke()
 
-                        if (window.trackingDataVisible) {
-                            // Den gamla distansservern skickar ingen vinkel.
-                            // Målet visas därför rakt fram på 0-graderslinjen.
-                            var ox = cx
-                            var oy = cy - Math.max(
-                                        4,
-                                        maxRadius * normalizedDistance
+                        // Kameramålet blir radarpricken.
+                        var frameWidth = Math.max(
+                                    1,
+                                    window.targetFrameWidth
+                                )
+                        var frameHeight = Math.max(
+                                    1,
+                                    window.targetFrameHeight
+                                )
+
+                        var targetAvailable =
+                                window.targetX > 0 ||
+                                window.targetY > 0
+
+                        if (targetAvailable) {
+                            var normalizedX = Math.max(
+                                        0,
+                                        Math.min(
+                                            1,
+                                            window.targetX / frameWidth
+                                        )
+                                    )
+                            var normalizedY = Math.max(
+                                        0,
+                                        Math.min(
+                                            1,
+                                            window.targetY / frameHeight
+                                        )
                                     )
 
-                            ctx.strokeStyle = stateColor
-                            ctx.lineWidth = 2
+                            var dotX = left +
+                                    normalizedX * scopeWidth
+                            var dotY = top +
+                                    normalizedY * scopeHeight
+
+                            // Linje från radarcentrum till målet.
+                            ctx.strokeStyle = window.lockedOn
+                                    ? "rgba(230,20,23,0.55)"
+                                    : "rgba(250,185,0,0.45)"
+                            ctx.lineWidth = 1
                             ctx.beginPath()
-                            ctx.moveTo(cx, cy)
-                            ctx.lineTo(ox, oy)
+                            ctx.moveTo(centerX, centerY)
+                            ctx.lineTo(dotX, dotY)
                             ctx.stroke()
 
+                            // Målprick och ring.
                             ctx.fillStyle = stateColor
                             ctx.beginPath()
-                            ctx.arc(ox, oy, 7, 0, Math.PI * 2)
+                            ctx.arc(dotX, dotY, 7, 0, Math.PI * 2)
                             ctx.fill()
 
                             ctx.strokeStyle = "#EDF2F4"
                             ctx.lineWidth = 1.5
                             ctx.beginPath()
-                            ctx.arc(ox, oy, 12, 0, Math.PI * 2)
+                            ctx.arc(dotX, dotY, 13, 0, Math.PI * 2)
+                            ctx.stroke()
+
+                            // Kort siktskors runt målpricken.
+                            ctx.strokeStyle = stateColor
+                            ctx.lineWidth = 1.5
+                            ctx.beginPath()
+                            ctx.moveTo(dotX - 18, dotY)
+                            ctx.lineTo(dotX - 10, dotY)
+                            ctx.moveTo(dotX + 10, dotY)
+                            ctx.lineTo(dotX + 18, dotY)
+                            ctx.moveTo(dotX, dotY - 18)
+                            ctx.lineTo(dotX, dotY - 10)
+                            ctx.moveTo(dotX, dotY + 10)
+                            ctx.lineTo(dotX, dotY + 18)
                             ctx.stroke()
                         }
 
-                        ctx.fillStyle = "#EDF2F4"
-                        ctx.beginPath()
-                        ctx.arc(cx, cy, 4, 0, Math.PI * 2)
-                        ctx.fill()
+                        ctx.fillStyle = "rgba(237,242,244,0.70)"
+                        ctx.font = "10px sans-serif"
+                        ctx.textAlign = "left"
+                        ctx.fillText("CAMERA TARGET RADAR", left + 7, top + 15)
+
+                        ctx.textAlign = "right"
+                        ctx.fillText(
+                                    window.lockedOn
+                                    ? "LOCK"
+                                    : "SCAN",
+                                    left + scopeWidth - 7,
+                                    top + 15
+                                )
                     }
 
                     Connections {
                         target: window
 
-                        function onLidarDistanceMChanged() {
+                        function onTargetXChanged() {
+                            lidarScopeCanvas.requestPaint()
+                        }
+
+                        function onTargetYChanged() {
+                            lidarScopeCanvas.requestPaint()
+                        }
+
+                        function onTargetFrameWidthChanged() {
+                            lidarScopeCanvas.requestPaint()
+                        }
+
+                        function onTargetFrameHeightChanged() {
                             lidarScopeCanvas.requestPaint()
                         }
 
                         function onLockedOnChanged() {
-                            lidarScopeCanvas.requestPaint()
-                        }
-
-                        function onLidarValidChanged() {
                             lidarScopeCanvas.requestPaint()
                         }
                     }
@@ -2051,7 +2106,7 @@ Window {
         Timer {
             id: feedTimer
             interval: 33
-            running: !window.isidle && window.cameraServerActive
+            running: window.networkEnabled && window.cameraServerActive
             repeat: true
             property bool waitingForLoad: false
 
@@ -2076,7 +2131,7 @@ Window {
             anchors.margins: 2
             radius: 6
             color: "#08131C"
-            visible: window.isidle || !turretItem.cameraReady
+            visible: !window.networkEnabled || !turretItem.cameraReady
             z: 10
 
             Canvas {
@@ -2119,9 +2174,7 @@ Window {
                 Text {
                     text: !window.networkEnabled
                           ? "CAMERA OFFLINE"
-                          : (window.isidle
-                             ? "CAMERA STANDBY"
-                             : "INITIALIZING CAMERA")
+                          : "INITIALIZING CAMERA"
                     color: window.uiText
                     font.pixelSize: 20
                     font.bold: true
@@ -2133,9 +2186,7 @@ Window {
                 Text {
                     text: !window.networkEnabled
                           ? "No network connection"
-                          : (window.isidle
-                             ? "Exit idle state to resume feed"
-                             : "Waiting for video stream")
+                          : "Waiting for video stream"
                     color: window.uiMuted
                     font.pixelSize: 12
                     font.family: "Eurostile"
@@ -2148,33 +2199,13 @@ Window {
             target: window
 
             function onIsidleChanged() {
+                // Behåll kamerabilden och de laddade bildkällorna i IDLE.
                 feedTimer.waitingForLoad = false
-                turretItem.cameraReady = false
-                feed1.source = ""
-                feed2.source = ""
 
-                if (window.isidle) {
-                    window.lockedOn = false
-                    window.targetX = 0
-                    window.targetY = 0
-
-                    var request = window.lidarActiveRequest
-                    window.lidarActiveRequest = null
-                    window.lidarRequestPending = false
-                    window.lidarConnected = false
-                    window.lidarValid = false
-                    window.lidarDistanceMm = 0
-                    window.lidarDistanceM = 0.0
-                            window.lidarSource = "WAITING"
-                    window.lidarStatus = 0
-                    window.lidarMessage = "WAITING FOR CONNECTION"
-
-                    if (request !== null) {
-                        try {
-                            request.abort()
-                        } catch (error) {
-                        }
-                    }
+                if (window.networkEnabled &&
+                    !window.cameraServerActive &&
+                    !window.cameraCommandPending) {
+                    window.setCameraIdle(window.isidle)
                 }
             }
         }
@@ -2271,6 +2302,17 @@ Window {
         id: sdl
         property bool locked: false
         onButtonPressed: {
+            // Y får bara växla GAS/SERVO på huvudskärmen.
+            // I DEBUG och GUIDE ignoreras Y helt.
+            if (button === 3 &&
+                (debugScreen.visible || tutorial.visible)) {
+                window.y = 0
+                window.yButtonHeld = false
+                yReleasePulseTimer.stop()
+                console.log("Y ignored while DEBUG or GUIDE is open")
+                return
+            }
+
             reset_idle()
             if (status == "Intro") {
                 if (!window.networkEnabled) {
@@ -2313,6 +2355,12 @@ Window {
                 case 1: b = 1; break
                 case 2: x = 1; break
                 case 3:
+                    if (debugScreen.visible || tutorial.visible) {
+                        y = 0
+                        window.yButtonHeld = false
+                        break
+                    }
+
                     y = 1
 
                     var now = Date.now()
@@ -2362,6 +2410,15 @@ Window {
             }
         }
         onButtonReleased: {
+            // Inget Y-releasepaket skickas från DEBUG eller GUIDE.
+            if (button === 3 &&
+                (debugScreen.visible || tutorial.visible)) {
+                window.y = 0
+                window.yButtonHeld = false
+                yReleasePulseTimer.stop()
+                return
+            }
+
             if (status !== "Intro" && status != "idle") {
                 switch(button) {
                 case 0: a = 0; break
@@ -2543,6 +2600,7 @@ Window {
 
             Button {
                 id: debugButton
+                focusPolicy: Qt.NoFocus
                 text: "DEBUG"
                 width: 88
                 height: 42
@@ -2564,11 +2622,18 @@ Window {
                     font: debugButton.font
                 }
 
-                onClicked: debugScreen.visible = !debugScreen.visible
+                onClicked: {
+                    tutorial.visible = false
+                    debugScreen.visible = !debugScreen.visible
+
+                    if (debugScreen.visible)
+                        debugScreen.forceActiveFocus()
+                }
             }
 
             Button {
                 id: tutorialButton
+                focusPolicy: Qt.NoFocus
                 text: "GUIDE"
                 width: 88
                 height: 42
@@ -2590,7 +2655,13 @@ Window {
                     font: tutorialButton.font
                 }
 
-                onClicked: tutorial.visible = !tutorial.visible
+                onClicked: {
+                    debugScreen.visible = false
+                    tutorial.visible = !tutorial.visible
+
+                    if (tutorial.visible)
+                        tutorial.forceActiveFocus()
+                }
             }
 
             Button {
@@ -2642,6 +2713,20 @@ Window {
         visible: false
         color: window.uiBg
         z: 21
+        focus: visible
+
+        onVisibleChanged: {
+            if (visible)
+                forceActiveFocus()
+        }
+
+        Keys.onPressed: function(event) {
+            event.accepted = true
+        }
+
+        Keys.onReleased: function(event) {
+            event.accepted = true
+        }
 
         Canvas {
             anchors.fill: parent
@@ -2650,8 +2735,20 @@ Window {
                 var ctx = getContext("2d")
                 ctx.strokeStyle = "#1A2333"
                 ctx.lineWidth = 1
-                for (var x = 0; x < width; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke() }
-                for (var y = 0; y < height; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
+
+                for (var x = 0; x < width; x += 60) {
+                    ctx.beginPath()
+                    ctx.moveTo(x, 0)
+                    ctx.lineTo(x, height)
+                    ctx.stroke()
+                }
+
+                for (var y = 0; y < height; y += 60) {
+                    ctx.beginPath()
+                    ctx.moveTo(0, y)
+                    ctx.lineTo(width, y)
+                    ctx.stroke()
+                }
             }
         }
 
@@ -2659,110 +2756,205 @@ Window {
             id: debugTitle
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: parent.top
-            anchors.topMargin: 36
-            text: "DEBUGS"
-            font.pixelSize: 40
+            anchors.topMargin: 28
+            text: "DEBUG"
+            font.pixelSize: 34
             font.bold: true
             font.family: "Eurostile"
-            font.letterSpacing: 6
-            color: "#AFC7FF"
-        }
-Text{
-            text: socketValue
-            color:"white"
-        }
-        Text{
-            text:socketValue2
-            color:"white"
-            x:200
-        }
-        Text{
-            text:socketValue3
-            color:"white"
-            x:400
-        }
-        Text{
-            text:socketValue4
-            color:"white"
-            x:600
-        }
-        Text{
-            text:socketValue5
-            color:"white"
-            x:800
-        }
-        Text{
-            text: socketValue6
-            color:"white"
-            x:1000
+            font.letterSpacing: 5
+            color: window.uiText
         }
 
         Grid {
             anchors.top: debugTitle.bottom
-            anchors.topMargin: 28
+            anchors.topMargin: 18
             anchors.horizontalCenter: parent.horizontalCenter
             columns: 3
             spacing: 20
 
             Repeater {
                 model: [
-                    { label: "DEBUG 1", color: "#AFC7FF" },
-                    { label: "DEBUG 2", color: "#FF5555" },
-                    { label: "DEBUG 3", color: "#00FF88" },
-                    { label: "DEBUG 4", color: "#FFCC00" },
-                    { label: "DEBUG 5", color: "#FF9E3D" },
-                    { label: "DEBUG 6", color: "#B388FF" }
+                    {
+                        channel: 1,
+                        measurement: "SPÄNNING",
+                        fullUnit: "VOLT",
+                        unit: "V",
+                        rail: "3,3 V",
+                        color: "#AFC7FF"
+                    },
+                    {
+                        channel: 2,
+                        measurement: "SPÄNNING",
+                        fullUnit: "VOLT",
+                        unit: "V",
+                        rail: "5 V",
+                        color: "#FF5555"
+                    },
+                    {
+                        channel: 3,
+                        measurement: "SPÄNNING",
+                        fullUnit: "VOLT",
+                        unit: "V",
+                        rail: "14,8 V",
+                        color: "#00FF88"
+                    },
+                    {
+                        channel: 4,
+                        measurement: "STRÖM",
+                        fullUnit: "AMPERE",
+                        unit: "A",
+                        rail: "3,3 V",
+                        color: "#FFCC00"
+                    },
+                    {
+                        channel: 5,
+                        measurement: "STRÖM",
+                        fullUnit: "AMPERE",
+                        unit: "A",
+                        rail: "5 V",
+                        color: "#FF9E3D"
+                    },
+                    {
+                        channel: 6,
+                        measurement: "STRÖM",
+                        fullUnit: "AMPERE",
+                        unit: "A",
+                        rail: "14,8 V",
+                        color: "#B388FF"
+                    }
                 ]
+
                 delegate: Rectangle {
+                    id: debugCard
                     width: 400
                     height: 270
-                    radius: 6
-                    color: "#141B2C"
+                    radius: 7
+                    color: "#111B27"
                     border.color: modelData.color
                     border.width: 2
+
+                    property real channelValue: {
+                        switch (index) {
+                        case 0:
+                            return window.socketValue
+                        case 1:
+                            return window.socketValue2
+                        case 2:
+                            return window.socketValue3
+                        case 3:
+                            return window.socketValue4
+                        case 4:
+                            return window.socketValue5
+                        case 5:
+                            return window.socketValue6
+                        default:
+                            return 0
+                        }
+                    }
+
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        height: 4
+                        radius: 2
+                        color: modelData.color
+                    }
+
                     Column {
-                        anchors.centerIn: parent
-                        spacing: 10
-                        Text {
-                            text: modelData.label
-                            font.pixelSize: 16
-                            font.bold: true
-                            font.family: "Eurostile"
-                            font.letterSpacing: 2
-                            color: modelData.color
-                            anchors.horizontalCenter: parent.horizontalCenter
-                        }
-                        Graph {
-                            width: 360
-                            height: 210
-                            lineColor: modelData.color
-                            dataValue: {
-                                switch(index)
-                                {
-                                case 0:
-                                    socketValue
-                                    break;
-                                case 1:
-                                    socketValue2
-                                    break;
-                                case 2:
-                                    socketValue3
-                                    break;
-                                case 3:
-                                    socketValue4
-                                    break;
-                                case 4:
-                                    socketValue5
-                                    break;
-                                case 5:
-                                    socketValue6
-                                    break;
+                        anchors.fill: parent
+                        anchors.leftMargin: 18
+                        anchors.rightMargin: 18
+                        anchors.topMargin: 13
+                        anchors.bottomMargin: 12
+                        spacing: 6
+
+                        Item {
+                            width: parent.width
+                            height: 25
+
+                            Text {
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "DEBUG " + modelData.channel +
+                                      "  ·  " + modelData.measurement
+                                color: modelData.color
+                                font.pixelSize: 16
+                                font.bold: true
+                                font.family: "Eurostile"
+                                font.letterSpacing: 1.2
+                            }
+
+                            Rectangle {
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 78
+                                height: 24
+                                radius: 4
+                                color: "#0A141D"
+                                border.color: modelData.color
+                                border.width: 1
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData.rail
+                                    color: window.uiText
+                                    font.pixelSize: 12
+                                    font.bold: true
+                                    font.family: "Eurostile"
                                 }
-
-                               // index % 2 === 0 ? window.socketValue : window.
-
-
+                            }
                         }
+
+                        Item {
+                            width: parent.width
+                            height: 38
+
+                            Text {
+                                id: liveDebugValue
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: isFinite(debugCard.channelValue)
+                                      ? Number(debugCard.channelValue)
+                                            .toFixed(2)
+                                            .replace(".", ",")
+                                      : "--"
+                                color: window.uiText
+                                font.pixelSize: 28
+                                font.bold: true
+                                font.family: "Eurostile"
+                            }
+
+                            Text {
+                                anchors.left: liveDebugValue.right
+                                anchors.leftMargin: 10
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.verticalCenterOffset: 4
+                                text: modelData.unit
+                                color: modelData.color
+                                font.pixelSize: 17
+                                font.bold: true
+                                font.family: "Eurostile"
+                            }
+
+                            Text {
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.verticalCenterOffset: 4
+                                text: modelData.fullUnit
+                                color: window.uiMuted
+                                font.pixelSize: 11
+                                font.bold: true
+                                font.family: "Eurostile"
+                                font.letterSpacing: 2
+                            }
+                        }
+
+                        Graph {
+                            width: parent.width
+                            height: 164
+                            lineColor: modelData.color
+                            dataValue: debugCard.channelValue
                         }
                     }
                 }
@@ -2771,6 +2963,7 @@ Text{
 
         Button {
             id: debugQuit
+            focusPolicy: Qt.NoFocus
             text: "Quit"
             width: 120
             height: 52
@@ -2780,23 +2973,27 @@ Text{
             font.pixelSize: 18
             font.bold: true
             font.family: "Eurostile"
+
             background: Rectangle {
                 radius: 4
                 color: "#8A1F1F"
                 border.color: "#C44A4A"
                 border.width: 2
             }
+
             contentItem: Text {
                 text: debugQuit.text
                 anchors.centerIn: parent
                 color: "white"
                 font: debugQuit.font
             }
+
             onClicked: window.close()
         }
 
         Button {
             id: debugBack
+            focusPolicy: Qt.NoFocus
             text: "Tillbaka"
             width: 120
             height: 52
@@ -2806,18 +3003,21 @@ Text{
             font.pixelSize: 18
             font.bold: true
             font.family: "Eurostile"
+
             background: Rectangle {
                 radius: 4
                 color: "#1A2333"
                 border.color: "#3A4A66"
                 border.width: 2
             }
+
             contentItem: Text {
                 text: debugBack.text
                 anchors.centerIn: parent
                 color: "#AFC7FF"
                 font: debugBack.font
             }
+
             onClicked: debugScreen.visible = false
         }
     }
@@ -2829,6 +3029,20 @@ Text{
         visible: false
         color: window.uiBg
         z: 20
+        focus: visible
+
+        onVisibleChanged: {
+            if (visible)
+                forceActiveFocus()
+        }
+
+        Keys.onPressed: function(event) {
+            event.accepted = true
+        }
+
+        Keys.onReleased: function(event) {
+            event.accepted = true
+        }
 
         Canvas {
             anchors.fill: parent
@@ -2866,6 +3080,7 @@ Text{
 
         Button {
             id: tutorialQuit
+            focusPolicy: Qt.NoFocus
             text: "Quit"
             width: 120
             height: 52
@@ -2892,6 +3107,7 @@ Text{
 
         Button {
             id: backBtn
+            focusPolicy: Qt.NoFocus
             text: "Tillbaka"
             width: 120
             height: 52
