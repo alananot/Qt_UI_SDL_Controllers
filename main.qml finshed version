@@ -562,10 +562,8 @@ Window {
             return
         }
 
-        // Stoppa bildhämtningen direkt när idle börjar.
-        if (idleState)
-            window.cameraServerActive = false
-
+        // Kameraservern och kamerabilden ska fortsätta vara aktiva i IDLE.
+        // Endpointen anropas fortfarande för kompatibilitet med servern.
         window.cameraCommandPending = true
 
         var xhr = new XMLHttpRequest()
@@ -578,18 +576,11 @@ Window {
             window.cameraCommandPending = false
 
             if (xhr.status === 200) {
-                window.cameraServerActive = !idleState
-
-                if (!idleState) {
-                    turretItem.cameraReady = false
-                    feedTimer.waitingForLoad = false
-                }
+                window.cameraServerActive = true
+                feedTimer.waitingForLoad = false
             } else {
                 window.cameraServerActive = false
-
-                // Försök igen om kameran skulle misslyckas att starta.
-                if (!idleState && !window.isidle)
-                    cameraConnectRetry.restart()
+                cameraConnectRetry.restart()
             }
         }
 
@@ -1134,7 +1125,7 @@ Window {
             id: client
             property string modeBuffer: ""
             property string ammoBuffer: ""
-    
+
             onConnected: {
                 window.everOperative = true
                 intro_lamp.color = "green"
@@ -1654,7 +1645,7 @@ Window {
                 height: 320
                 radius: 6
                 color: "#08131C"
-                border.color: window.trackingDataVisible
+                border.color: window.lockedOn
                               ? window.uiRed
                               : window.uiYellow
                 border.width: 1
@@ -1664,10 +1655,10 @@ Window {
                     anchors.leftMargin: 12
                     anchors.top: parent.top
                     anchors.topMargin: 10
-                    text: window.trackingDataVisible
+                    text: window.lockedOn
                           ? "TARGET LOCKED"
                           : "SEARCHING"
-                    color: window.trackingDataVisible
+                    color: window.lockedOn
                            ? window.uiRed
                            : window.uiYellow
                     font.pixelSize: 12
@@ -1681,8 +1672,8 @@ Window {
                     anchors.rightMargin: 12
                     anchors.top: parent.top
                     anchors.topMargin: 10
-                    text: "±90° / " +
-                          window.lidarMaxRangeM.toFixed(0) + " m"
+                    text: window.targetFrameWidth + " × " +
+                          window.targetFrameHeight
                     color: window.uiMuted
                     font.pixelSize: 10
                     font.bold: true
@@ -1692,12 +1683,23 @@ Window {
                 Canvas {
                     id: lidarScopeCanvas
                     anchors.fill: parent
-                    anchors.leftMargin: 10
-                    anchors.rightMargin: 10
-                    anchors.topMargin: 34
-                    anchors.bottomMargin: 10
+                    anchors.leftMargin: 12
+                    anchors.rightMargin: 12
+                    anchors.topMargin: 36
+                    anchors.bottomMargin: 12
                     antialiasing: true
 
+                    property real sweepAngle: 0
+
+                    NumberAnimation on sweepAngle {
+                        from: 0
+                        to: 360
+                        duration: 2400
+                        loops: Animation.Infinite
+                        running: true
+                    }
+
+                    onSweepAngleChanged: requestPaint()
                     onWidthChanged: requestPaint()
                     onHeightChanged: requestPaint()
                     Component.onCompleted: requestPaint()
@@ -1706,165 +1708,218 @@ Window {
                         var ctx = getContext("2d")
                         ctx.clearRect(0, 0, width, height)
 
-                        var cx = width / 2
-                        var cy = height - 16
-                        var maxRadius = Math.min(
-                                    width / 2 - 12,
-                                    height - 28
-                                )
+                        var margin = 8
+                        var left = margin
+                        var top = margin
+                        var scopeWidth = width - margin * 2
+                        var scopeHeight = height - margin * 2
+                        var centerX = left + scopeWidth / 2
+                        var centerY = top + scopeHeight / 2
 
-                        var stateColor =
-                                window.trackingDataVisible
+                        var stateColor = window.lockedOn
                                 ? "#E61417"
                                 : "#FAB900"
 
-                        var normalizedDistance =
-                                window.trackingDataVisible
-                                ? Math.max(
-                                      0,
-                                      Math.min(
-                                          1,
-                                          window.lidarDistanceM /
-                                          window.lidarMaxRangeM
-                                      )
-                                  )
-                                : 0
-                        var filledRadius =
-                                maxRadius * normalizedDistance
+                        // Fyrkantig radargrund.
+                        ctx.fillStyle = "rgba(5,18,27,0.95)"
+                        ctx.fillRect(left, top, scopeWidth, scopeHeight)
 
-                        ctx.fillStyle =
-                                window.trackingDataVisible
-                                ? "rgba(230,20,23,0.16)"
-                                : "rgba(250,185,0,0.20)"
-                        ctx.beginPath()
-                        ctx.moveTo(cx, cy)
-                        ctx.arc(
-                            cx,
-                            cy,
-                            filledRadius,
-                            Math.PI,
-                            Math.PI * 2
-                        )
-                        ctx.closePath()
-                        ctx.fill()
+                        ctx.strokeStyle = "rgba(145,155,155,0.50)"
+                        ctx.lineWidth = 1
+                        ctx.strokeRect(left, top, scopeWidth, scopeHeight)
 
-                        ctx.strokeStyle =
-                                window.trackingDataVisible
-                                ? "rgba(230,20,23,0.52)"
-                                : "rgba(250,185,0,0.52)"
+                        // Rutnät.
+                        ctx.strokeStyle = "rgba(145,155,155,0.20)"
                         ctx.lineWidth = 1
 
-                        for (var ring = 1; ring <= 4; ++ring) {
-                            var rr = maxRadius * ring / 4
+                        for (var gx = 1; gx < 8; ++gx) {
+                            var gridX = left + scopeWidth * gx / 8
                             ctx.beginPath()
-                            ctx.arc(
-                                cx,
-                                cy,
-                                rr,
-                                Math.PI,
-                                Math.PI * 2
-                            )
+                            ctx.moveTo(gridX, top)
+                            ctx.lineTo(gridX, top + scopeHeight)
                             ctx.stroke()
-
-                            ctx.fillStyle = "rgba(237,242,244,0.70)"
-                            ctx.font = "10px sans-serif"
-                            ctx.textAlign = "center"
-                            ctx.fillText(
-                                (window.lidarMaxRangeM * ring / 4)
-                                    .toFixed(1) + "m",
-                                cx,
-                                cy - rr + 11
-                            )
                         }
 
-                        ctx.strokeStyle = "rgba(145,155,155,0.65)"
+                        for (var gy = 1; gy < 6; ++gy) {
+                            var gridY = top + scopeHeight * gy / 6
+                            ctx.beginPath()
+                            ctx.moveTo(left, gridY)
+                            ctx.lineTo(left + scopeWidth, gridY)
+                            ctx.stroke()
+                        }
+
+                        // Mittlinjer och mittpunkt.
+                        ctx.strokeStyle = "rgba(237,242,244,0.48)"
+                        ctx.lineWidth = 1
+
                         ctx.beginPath()
-                        ctx.moveTo(cx - maxRadius, cy)
-                        ctx.lineTo(cx + maxRadius, cy)
+                        ctx.moveTo(centerX, top)
+                        ctx.lineTo(centerX, top + scopeHeight)
                         ctx.stroke()
 
-                        var angles = [-90, -60, -30, 0, 30, 60, 90]
+                        ctx.beginPath()
+                        ctx.moveTo(left, centerY)
+                        ctx.lineTo(left + scopeWidth, centerY)
+                        ctx.stroke()
 
-                        for (var i = 0; i < angles.length; ++i) {
-                            var angleDeg = angles[i]
-                            var angleRad = angleDeg * Math.PI / 180
-                            var ex = cx + Math.sin(angleRad) * maxRadius
-                            var ey = cy - Math.cos(angleRad) * maxRadius
+                        ctx.fillStyle = "#EDF2F4"
+                        ctx.beginPath()
+                        ctx.arc(centerX, centerY, 4, 0, Math.PI * 2)
+                        ctx.fill()
 
-                            ctx.strokeStyle =
-                                    "rgba(145,155,155,0.34)"
-                            ctx.beginPath()
-                            ctx.moveTo(cx, cy)
-                            ctx.lineTo(ex, ey)
-                            ctx.stroke()
+                        ctx.strokeStyle = "#EDF2F4"
+                        ctx.beginPath()
+                        ctx.arc(centerX, centerY, 10, 0, Math.PI * 2)
+                        ctx.stroke()
 
-                            ctx.fillStyle = "rgba(237,242,244,0.68)"
-                            ctx.font = "10px sans-serif"
-                            ctx.textAlign = "center"
+                        // Roterande radarsvep från mitten.
+                        var angleRad =
+                                (lidarScopeCanvas.sweepAngle - 90) *
+                                Math.PI / 180
+                        var dx = Math.cos(angleRad)
+                        var dy = Math.sin(angleRad)
+                        var edgeScale = Math.min(
+                                    Math.abs(scopeWidth / 2 /
+                                             (Math.abs(dx) < 0.0001
+                                              ? 0.0001
+                                              : dx)),
+                                    Math.abs(scopeHeight / 2 /
+                                             (Math.abs(dy) < 0.0001
+                                              ? 0.0001
+                                              : dy))
+                                )
+                        var sweepX = centerX + dx * edgeScale
+                        var sweepY = centerY + dy * edgeScale
 
-                            var labelX = cx +
-                                    Math.sin(angleRad) *
-                                    (maxRadius + 5)
-                            var labelY = cy -
-                                    Math.cos(angleRad) *
-                                    (maxRadius + 5)
+                        var gradient = ctx.createLinearGradient(
+                                    centerX,
+                                    centerY,
+                                    sweepX,
+                                    sweepY
+                                )
+                        gradient.addColorStop(
+                                    0,
+                                    "rgba(56,201,139,0.08)"
+                                )
+                        gradient.addColorStop(
+                                    1,
+                                    "rgba(56,201,139,0.80)"
+                                )
 
-                            ctx.fillText(
-                                angleDeg + "°",
-                                labelX,
-                                angleDeg === -90 ||
-                                angleDeg === 90
-                                    ? labelY - 2
-                                    : labelY + 4
-                            )
-                        }
+                        ctx.strokeStyle = gradient
+                        ctx.lineWidth = 2
+                        ctx.beginPath()
+                        ctx.moveTo(centerX, centerY)
+                        ctx.lineTo(sweepX, sweepY)
+                        ctx.stroke()
 
-                        if (window.trackingDataVisible) {
-                            // Den gamla distansservern skickar ingen vinkel.
-                            // Målet visas därför rakt fram på 0-graderslinjen.
-                            var ox = cx
-                            var oy = cy - Math.max(
-                                        4,
-                                        maxRadius * normalizedDistance
+                        // Kameramålet blir radarpricken.
+                        var frameWidth = Math.max(
+                                    1,
+                                    window.targetFrameWidth
+                                )
+                        var frameHeight = Math.max(
+                                    1,
+                                    window.targetFrameHeight
+                                )
+
+                        var targetAvailable =
+                                window.targetX > 0 ||
+                                window.targetY > 0
+
+                        if (targetAvailable) {
+                            var normalizedX = Math.max(
+                                        0,
+                                        Math.min(
+                                            1,
+                                            window.targetX / frameWidth
+                                        )
+                                    )
+                            var normalizedY = Math.max(
+                                        0,
+                                        Math.min(
+                                            1,
+                                            window.targetY / frameHeight
+                                        )
                                     )
 
-                            ctx.strokeStyle = stateColor
-                            ctx.lineWidth = 2
+                            var dotX = left +
+                                    normalizedX * scopeWidth
+                            var dotY = top +
+                                    normalizedY * scopeHeight
+
+                            // Linje från radarcentrum till målet.
+                            ctx.strokeStyle = window.lockedOn
+                                    ? "rgba(230,20,23,0.55)"
+                                    : "rgba(250,185,0,0.45)"
+                            ctx.lineWidth = 1
                             ctx.beginPath()
-                            ctx.moveTo(cx, cy)
-                            ctx.lineTo(ox, oy)
+                            ctx.moveTo(centerX, centerY)
+                            ctx.lineTo(dotX, dotY)
                             ctx.stroke()
 
+                            // Målprick och ring.
                             ctx.fillStyle = stateColor
                             ctx.beginPath()
-                            ctx.arc(ox, oy, 7, 0, Math.PI * 2)
+                            ctx.arc(dotX, dotY, 7, 0, Math.PI * 2)
                             ctx.fill()
 
                             ctx.strokeStyle = "#EDF2F4"
                             ctx.lineWidth = 1.5
                             ctx.beginPath()
-                            ctx.arc(ox, oy, 12, 0, Math.PI * 2)
+                            ctx.arc(dotX, dotY, 13, 0, Math.PI * 2)
+                            ctx.stroke()
+
+                            // Kort siktskors runt målpricken.
+                            ctx.strokeStyle = stateColor
+                            ctx.lineWidth = 1.5
+                            ctx.beginPath()
+                            ctx.moveTo(dotX - 18, dotY)
+                            ctx.lineTo(dotX - 10, dotY)
+                            ctx.moveTo(dotX + 10, dotY)
+                            ctx.lineTo(dotX + 18, dotY)
+                            ctx.moveTo(dotX, dotY - 18)
+                            ctx.lineTo(dotX, dotY - 10)
+                            ctx.moveTo(dotX, dotY + 10)
+                            ctx.lineTo(dotX, dotY + 18)
                             ctx.stroke()
                         }
 
-                        ctx.fillStyle = "#EDF2F4"
-                        ctx.beginPath()
-                        ctx.arc(cx, cy, 4, 0, Math.PI * 2)
-                        ctx.fill()
+                        ctx.fillStyle = "rgba(237,242,244,0.70)"
+                        ctx.font = "10px sans-serif"
+                        ctx.textAlign = "left"
+                        ctx.fillText("CAMERA TARGET RADAR", left + 7, top + 15)
+
+                        ctx.textAlign = "right"
+                        ctx.fillText(
+                                    window.lockedOn
+                                    ? "LOCK"
+                                    : "SCAN",
+                                    left + scopeWidth - 7,
+                                    top + 15
+                                )
                     }
 
                     Connections {
                         target: window
 
-                        function onLidarDistanceMChanged() {
+                        function onTargetXChanged() {
+                            lidarScopeCanvas.requestPaint()
+                        }
+
+                        function onTargetYChanged() {
+                            lidarScopeCanvas.requestPaint()
+                        }
+
+                        function onTargetFrameWidthChanged() {
+                            lidarScopeCanvas.requestPaint()
+                        }
+
+                        function onTargetFrameHeightChanged() {
                             lidarScopeCanvas.requestPaint()
                         }
 
                         function onLockedOnChanged() {
-                            lidarScopeCanvas.requestPaint()
-                        }
-
-                        function onLidarValidChanged() {
                             lidarScopeCanvas.requestPaint()
                         }
                     }
@@ -2051,7 +2106,7 @@ Window {
         Timer {
             id: feedTimer
             interval: 33
-            running: !window.isidle && window.cameraServerActive
+            running: window.networkEnabled && window.cameraServerActive
             repeat: true
             property bool waitingForLoad: false
 
@@ -2076,7 +2131,7 @@ Window {
             anchors.margins: 2
             radius: 6
             color: "#08131C"
-            visible: window.isidle || !turretItem.cameraReady
+            visible: !window.networkEnabled || !turretItem.cameraReady
             z: 10
 
             Canvas {
@@ -2119,9 +2174,7 @@ Window {
                 Text {
                     text: !window.networkEnabled
                           ? "CAMERA OFFLINE"
-                          : (window.isidle
-                             ? "CAMERA STANDBY"
-                             : "INITIALIZING CAMERA")
+                          : "INITIALIZING CAMERA"
                     color: window.uiText
                     font.pixelSize: 20
                     font.bold: true
@@ -2133,9 +2186,7 @@ Window {
                 Text {
                     text: !window.networkEnabled
                           ? "No network connection"
-                          : (window.isidle
-                             ? "Exit idle state to resume feed"
-                             : "Waiting for video stream")
+                          : "Waiting for video stream"
                     color: window.uiMuted
                     font.pixelSize: 12
                     font.family: "Eurostile"
@@ -2148,33 +2199,13 @@ Window {
             target: window
 
             function onIsidleChanged() {
+                // Behåll kamerabilden och de laddade bildkällorna i IDLE.
                 feedTimer.waitingForLoad = false
-                turretItem.cameraReady = false
-                feed1.source = ""
-                feed2.source = ""
 
-                if (window.isidle) {
-                    window.lockedOn = false
-                    window.targetX = 0
-                    window.targetY = 0
-
-                    var request = window.lidarActiveRequest
-                    window.lidarActiveRequest = null
-                    window.lidarRequestPending = false
-                    window.lidarConnected = false
-                    window.lidarValid = false
-                    window.lidarDistanceMm = 0
-                    window.lidarDistanceM = 0.0
-                            window.lidarSource = "WAITING"
-                    window.lidarStatus = 0
-                    window.lidarMessage = "WAITING FOR CONNECTION"
-
-                    if (request !== null) {
-                        try {
-                            request.abort()
-                        } catch (error) {
-                        }
-                    }
+                if (window.networkEnabled &&
+                    !window.cameraServerActive &&
+                    !window.cameraCommandPending) {
+                    window.setCameraIdle(window.isidle)
                 }
             }
         }
