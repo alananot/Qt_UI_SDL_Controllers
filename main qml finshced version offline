@@ -149,6 +149,11 @@ Window {
     // true = GAS, false = SERVO MOTOR.
     // Y-knappen växlar mellan dessa två lägen.
     property bool gasMode: true
+
+    // När användaren eller servern byter mellan GAS och SERVO
+    // töms samtliga kanistrar omedelbart.
+    onGasModeChanged: window.clearAmmunitionOnModeChange()
+
     property bool firingModeKnown: true
     property bool firingModePending: false
 
@@ -389,6 +394,30 @@ Window {
             receiver.canisterBuffer.length > 256) {
             receiver.canisterBuffer = ""
         }
+    }
+
+    function clearAmmunitionOnModeChange() {
+        // Varje byte mellan GAS och SERVO ska börja med tom ammunition.
+        window.mLeft = false
+        window.mMid = false
+        window.mRight = false
+
+        // Nollställ väntande och tidigare serverhändelser så att ett
+        // försenat svar inte kan ladda eller skjuta efter lägesbytet.
+        window.ammunitionActivatedByUser = false
+        window.ammoPendingAction = ""
+        window.ammoPendingUntil = 0
+        window.lastAmmoServerEvent = ""
+        window.lastAmmoServerEventAt = 0
+        window.lastServerShoulderL = 0
+        window.lastServerShoulderR = 0
+        window.l1ButtonHeld = false
+        window.r1ButtonHeld = false
+
+        console.log(
+            "Firing mode changed - all ammunition cleared:",
+            window.gasMode ? "GAS" : "SERVO"
+        )
     }
 
     function ammunitionCount() {
