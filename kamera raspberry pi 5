@@ -1,31 +1,65 @@
 from picamera2 import Picamera2
 import cv2
-import numpy as np
 import threading
 import time
+import logging
 from flask import Flask, Response, jsonify
 import serial
 import RPi.GPIO as GPIO
+from time import sleep
+
 GPIO.setmode(GPIO.BOARD)
 
-
-GPIO.setup(11, GPIO.OUT, initial= GPIO.LOW)
-
+GPIO.setup(11, GPIO.OUT, initial=GPIO.LOW)
+GPIO.setup(13, GPIO.OUT, initial=GPIO.LOW)
+GPIO.setup(15, GPIO.OUT, initial=GPIO.LOW)
 
 app = Flask(__name__)
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
-picam2 = Picamera2()
-config = picam2.create_video_configuration(main={"size": (640, 480)}, controls={"FrameRate": 144}) #MAX 4608 * 2592
-picam2.configure(config)
-picam2.start()
-picam2.set_controls({"ExposureTime": 800, "AnalogueGain": 6.0})
+# ============================================================
+# KAMERA
+# ============================================================
 
 FRAME_W = 640
 FRAME_H = 480
+TARGET_FPS = 120
+
+picam2 = Picamera2()
+
+# Direkt 640x480 och RGB888 minskar CPU-belastningen.
+config = picam2.create_video_configuration(
+    main={
+        "size": (FRAME_W, FRAME_H),
+        "format": "RGB888",
+    },
+    controls={
+        "FrameRate": TARGET_FPS,
+    },
+    buffer_count=6,
+    queue=False,
+)
+
+picam2.configure(config)
+picam2.start()
+picam2.set_controls({
+    "ExposureTime": 800,
+    "AnalogueGain": 6.0,
+})
+
+# ============================================================
+# TRACKING
+# ============================================================
+
 LOCK_THRESHOLD = 5
 LOCK_LOST_THRESHOLD = 60
 MAX_JUMP = 200
+MAX_JUMP_SQUARED = MAX_JUMP * MAX_JUMP
 BRIGHTNESS_THRESHOLD = 200
+MIN_CONTOUR_AREA = 1
+
+distance = 0.0
+distance_lock = threading.Lock()
 
 tracked_cx = None
 tracked_cy = None
@@ -33,7 +67,7 @@ lock_counter = 0
 lost_counter = 0
 is_locked = False
 force_unlock = False
-unlock_cooldown_until = 0
+unlock_cooldown_until = 0.0
 
 velocity_x = 0.0
 velocity_y = 0.0
@@ -44,59 +78,206 @@ smooth_cx = 0
 smooth_cy = 0
 
 frame_count = 0
-fps_start = time.time()
+fps_start = time.perf_counter()
 current_fps = 0.0
 
 latest_jpeg = None
 jpeg_lock = threading.Lock()
 
-ser = serial.Serial('/dev/serial0', baudrate=115200, timeout = 0.001)
+# Kameran är alltid aktiv, även när GUI:t går till IDLE.
+camera_active = True
+camera_state_lock = threading.Lock()
+camera_operation_lock = threading.Lock()
+
+# ============================================================
+# UART
+# ============================================================
+
+ser = serial.Serial(
+    "/dev/ttyAMA2",
+    baudrate=115200,
+    timeout=0,
+    write_timeout=0,
+)
+
+serial_write_lock = threading.Lock()
+currentCanister = 1
+
+
+def pulse_output(pin):
+    GPIO.output(pin, GPIO.HIGH)
+    sleep(0.01)
+    GPIO.output(pin, GPIO.LOW)
+
+
+def uart_receive_loop():
+    global currentCanister
+
+    buffer = bytearray()
+
+    while True:
+        try:
+            waiting = ser.in_waiting
+
+            if waiting > 0:
+                buffer.extend(ser.read(waiting))
+
+                while b"\n" in buffer:
+                    line, _, buffer = buffer.partition(b"\n")
+                    message = line.decode(errors="ignore").strip()
+
+                    if not message:
+                        continue
+
+                    print(message)
+
+                    if message == "Shoot":
+                        if currentCanister == 1:
+                            pulse_output(11)
+                        elif currentCanister == 2:
+                            pulse_output(13)
+                        elif currentCanister == 3:
+                            pulse_output(15)
+
+                    elif message == "Right":
+                        currentCanister = (
+                            1 if currentCanister == 3
+                            else currentCanister + 1
+                        )
+
+                    elif message == "Left":
+                        currentCanister = (
+                            3 if currentCanister == 1
+                            else currentCanister - 1
+                        )
+            else:
+                time.sleep(0.001)
+
+        except serial.SerialException as error:
+            print(f"UART read error: {error}")
+            time.sleep(0.1)
+
+
+def send_coordinates(cx, cy, measured_distance):
+    packet = f"{cx},{cy},{measured_distance} \n".encode("utf-8")
+
+    try:
+        with serial_write_lock:
+            ser.write(packet)
+    except (serial.SerialException, serial.SerialTimeoutException):
+        # En missad sändning får inte bromsa kameran.
+        pass
+
+
+# ============================================================
+# DISTANSFIL
+# ============================================================
+
+def distance_loop():
+    global distance
+
+    while True:
+        try:
+            with open("distance.txt", "r") as file:
+                data = file.read().strip()
+
+            if data:
+                value = float(data)
+
+                with distance_lock:
+                    distance = value
+
+        except (OSError, ValueError):
+            pass
+
+        # 50 avläsningar/s är mer än tillräckligt.
+        time.sleep(0.02)
+
+
+# ============================================================
+# HJÄLPFUNKTION
+# ============================================================
 
 def find_closest_contour(contours, cx, cy):
     best = None
-    best_dist = float('inf')
+    best_dist_squared = float("inf")
     best_cx = 0
     best_cy = 0
-    for c in contours:
-        M = cv2.moments(c)
-        if M["m00"] == 0:
+
+    for contour in contours:
+        if cv2.contourArea(contour) < MIN_CONTOUR_AREA:
             continue
-        ccx = int(M["m10"] / M["m00"])
-        ccy = int(M["m01"] / M["m00"])
-        dist = ((ccx - cx) ** 2 + (ccy - cy) ** 2) ** 0.5
-        if dist < best_dist:
-            best_dist = dist
-            best = c
-            best_cx = ccx
-            best_cy = ccy
-    return best, best_cx, best_cy, best_dist
+
+        moments = cv2.moments(contour)
+
+        if moments["m00"] == 0:
+            continue
+
+        contour_cx = int(moments["m10"] / moments["m00"])
+        contour_cy = int(moments["m01"] / moments["m00"])
+
+        dx = contour_cx - cx
+        dy = contour_cy - cy
+        dist_squared = dx * dx + dy * dy
+
+        if dist_squared < best_dist_squared:
+            best_dist_squared = dist_squared
+            best = contour
+            best_cx = contour_cx
+            best_cy = contour_cy
+
+    return best, best_cx, best_cy, best_dist_squared
+
+
+# ============================================================
+# KAMERALOOP
+# ============================================================
 
 def camera_loop():
     global tracked_cx, tracked_cy
-    global lock_counter, lost_counter, is_locked, smooth_cx, smooth_cy
+    global lock_counter, lost_counter, is_locked
+    global smooth_cx, smooth_cy
     global force_unlock, unlock_cooldown_until
-    global velocity_x, velocity_y, predicted_cx, predicted_cy
+    global velocity_x, velocity_y
+    global predicted_cx, predicted_cy
     global frame_count, fps_start, current_fps
     global latest_jpeg
 
     while True:
+        # Kameran stoppas aldrig i IDLE.
+        with camera_operation_lock:
+            frame = picam2.capture_array("main")
+
+        now_perf = time.perf_counter()
         frame_count += 1
-        elapsed = time.time() - fps_start
+        elapsed = now_perf - fps_start
+
         if elapsed >= 1.0:
             current_fps = frame_count / elapsed
             frame_count = 0
-            fps_start = time.time()
+            fps_start = now_perf
 
-        frame = picam2.capture_array()
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)
-
+        # RGB888 kommer direkt från kameran.
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-        _, mask = cv2.threshold(gray, BRIGHTNESS_THRESHOLD, 255, cv2.THRESH_BINARY)
-        mask_3ch = cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB)
-        frame = cv2.bitwise_and(frame, mask_3ch)
 
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        _, mask = cv2.threshold(
+            gray,
+            BRIGHTNESS_THRESHOLD,
+            255,
+            cv2.THRESH_BINARY,
+        )
 
+        # Samma bildutseende som tidigare:
+        # allt under ljuströskeln blir svart.
+        frame = cv2.bitwise_and(frame, frame, mask=mask)
+
+        contours, _ = cv2.findContours(
+            mask,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
+
+        # Exakt samma A/unlock-beteende som tidigare.
         if force_unlock:
             tracked_cx = None
             tracked_cy = None
@@ -111,47 +292,88 @@ def camera_loop():
             unlock_cooldown_until = time.time() + 10
 
         if time.time() >= unlock_cooldown_until:
-            if len(contours) > 0:
+            if contours:
                 if tracked_cx is None:
-                    best_c = max(contours, key=cv2.contourArea)
-                    M = cv2.moments(best_c)
-                    if M["m00"] > 0:
-                        cx = int(M["m10"] / M["m00"])
-                        cy = int(M["m01"] / M["m00"])
-                        tracked_cx = cx
-                        tracked_cy = cy
+                    best_contour = max(contours, key=cv2.contourArea)
+                    moments = cv2.moments(best_contour)
+
+                    if moments["m00"] > 0:
+                        tracked_cx = int(
+                            moments["m10"] / moments["m00"]
+                        )
+                        tracked_cy = int(
+                            moments["m01"] / moments["m00"]
+                        )
                         lock_counter = 1
                         lost_counter = 0
                         velocity_x = 0.0
                         velocity_y = 0.0
-                else:
-                    search_cx = predicted_cx if predicted_cx is not None else tracked_cx
-                    search_cy = predicted_cy if predicted_cy is not None else tracked_cy
 
-                    _, new_cx, new_cy, dist = find_closest_contour(
-                        contours,
-                        search_cx,
-                        search_cy
+                else:
+                    search_cx = (
+                        predicted_cx
+                        if predicted_cx is not None
+                        else tracked_cx
+                    )
+                    search_cy = (
+                        predicted_cy
+                        if predicted_cy is not None
+                        else tracked_cy
                     )
 
-                    if dist < MAX_JUMP:
-                        velocity_x = velocity_x * 0.7 + (new_cx - tracked_cx) * 0.3
-                        velocity_y = velocity_y * 0.7 + (new_cy - tracked_cy) * 0.3
+                    (
+                        best_contour,
+                        new_cx,
+                        new_cy,
+                        dist_squared,
+                    ) = find_closest_contour(
+                        contours,
+                        search_cx,
+                        search_cy,
+                    )
+
+                    if (
+                        best_contour is not None
+                        and dist_squared < MAX_JUMP_SQUARED
+                    ):
+                        velocity_x = (
+                            velocity_x * 0.7
+                            + (new_cx - tracked_cx) * 0.3
+                        )
+                        velocity_y = (
+                            velocity_y * 0.7
+                            + (new_cy - tracked_cy) * 0.3
+                        )
+
                         tracked_cx = new_cx
                         tracked_cy = new_cy
-                        lock_counter = min(lock_counter + 1, LOCK_THRESHOLD + 1)
+
+                        lock_counter = min(
+                            lock_counter + 1,
+                            LOCK_THRESHOLD + 1,
+                        )
+
                         lost_counter = 0
                         predicted_cx = None
                         predicted_cy = None
+
                     else:
                         lost_counter += 1
-                        predicted_cx = int(tracked_cx + velocity_x)
-                        predicted_cy = int(tracked_cy + velocity_y)
-            else:
-                if tracked_cx is not None:
-                    lost_counter += 1
-                    predicted_cx = int(tracked_cx + velocity_x)
-                    predicted_cy = int(tracked_cy + velocity_y)
+                        predicted_cx = int(
+                            tracked_cx + velocity_x
+                        )
+                        predicted_cy = int(
+                            tracked_cy + velocity_y
+                        )
+
+            elif tracked_cx is not None:
+                lost_counter += 1
+                predicted_cx = int(
+                    tracked_cx + velocity_x
+                )
+                predicted_cy = int(
+                    tracked_cy + velocity_y
+                )
 
             if lost_counter >= LOCK_LOST_THRESHOLD:
                 tracked_cx = None
@@ -166,50 +388,56 @@ def camera_loop():
 
             is_locked = lock_counter >= LOCK_THRESHOLD
 
-            # Rita grön box runt ALLA detekterade ljuskällor
-            for c in contours:
-                M = cv2.moments(c)
-                if M["m00"] == 0:
+            # Rita grön box runt alla detekterade ljuskällor.
+            for contour in contours:
+                if cv2.contourArea(contour) < MIN_CONTOUR_AREA:
                     continue
-                ccx = int(M["m10"] / M["m00"])
-                ccy = int(M["m01"] / M["m00"])
-                size = 20
-                cv2.rectangle(
-                    frame,
-                    (ccx - size, ccy - size),
-                    (ccx + size, ccy + size),
-                    (0, 255, 0),
-                    1
+
+                moments = cv2.moments(contour)
+
+                if moments["m00"] == 0:
+                    continue
+
+                contour_cx = int(
+                    moments["m10"] / moments["m00"]
+                )
+                contour_cy = int(
+                    moments["m01"] / moments["m00"]
                 )
 
-            # Rita grön tracking-box ovanpå
-            if tracked_cx is not None and lock_counter > 0:
-                color = (0, 255, 0)
                 size = 20
+
+                cv2.rectangle(
+                    frame,
+                    (contour_cx - size, contour_cy - size),
+                    (contour_cx + size, contour_cy + size),
+                    (0, 255, 0),
+                    1,
+                )
+
+            # Rita tracking-box.
+            if tracked_cx is not None and lock_counter > 0:
+                size = 20
+
                 cv2.rectangle(
                     frame,
                     (tracked_cx - size, tracked_cy - size),
                     (tracked_cx + size, tracked_cy + size),
-                    color,
-                    2
+                    (0, 255, 0),
+                    2,
                 )
 
                 smooth_cx = tracked_cx
                 smooth_cy = tracked_cy
 
-                data_coord = f"{tracked_cx},{tracked_cy} \n"
-                ser.write(data_coord.encode('utf-8'))
-                message = ser.readline().decode().strip()
-                print(message)
-                
-                if(message =="Shoot"):
-                    GPIO.output(11, GPIO.HIGH)
-                    sleep(1)
-                    GPIO.output(11, GPIO.LOW)
-                    
-                
+                with distance_lock:
+                    measured_distance = distance
 
-
+                send_coordinates(
+                    tracked_cx,
+                    tracked_cy,
+                    measured_distance,
+                )
 
             if predicted_cx is not None and lost_counter > 0:
                 cv2.circle(
@@ -217,76 +445,164 @@ def camera_loop():
                     (predicted_cx, predicted_cy),
                     4,
                     (150, 150, 0),
-                    1
+                    1,
                 )
 
         cv2.putText(
             frame,
             f"FPS: {int(current_fps)}",
-            (8, 18),
+            (8, 24),
             cv2.FONT_HERSHEY_SIMPLEX,
-            1.0,
+            0.75,
             (140, 140, 140),
-            1
+            1,
+            cv2.LINE_AA,
         )
 
-        _, jpeg = cv2.imencode(
-            '.jpg',
+        # Lägre JPEG-kvalitet ger jämnare bild och mindre CPU-belastning.
+        ok, jpeg = cv2.imencode(
+            ".jpg",
             frame,
-            [cv2.IMWRITE_JPEG_QUALITY, 60]
+            [cv2.IMWRITE_JPEG_QUALITY, 50],
         )
+
+        if not ok:
+            continue
 
         with jpeg_lock:
             latest_jpeg = jpeg.tobytes()
 
-cam_thread = threading.Thread(target=camera_loop, daemon=True)
-cam_thread.start()
+
+# ============================================================
+# STARTA TRÅDAR
+# ============================================================
+
+threading.Thread(
+    target=distance_loop,
+    daemon=True,
+).start()
+
+threading.Thread(
+    target=uart_receive_loop,
+    daemon=True,
+).start()
+
+threading.Thread(
+    target=camera_loop,
+    daemon=True,
+).start()
+
+
+# ============================================================
+# FLASK
+# ============================================================
 
 def generate():
     while True:
         with jpeg_lock:
-            if latest_jpeg is None:
-                time.sleep(0.01)
-                continue
             frame_bytes = latest_jpeg
 
+        if frame_bytes is None:
+            time.sleep(0.005)
+            continue
+
         yield (
-            b'--frame\r\n'
-            b'Content-Type: image/jpeg\r\n\r\n'
+            b"--frame\r\n"
+            b"Content-Type: image/jpeg\r\n\r\n"
             + frame_bytes
-            + b'\r\n'
+            + b"\r\n"
         )
 
-@app.route('/video')
+
+@app.route("/video")
 def video():
     return Response(
         generate(),
-        mimetype='multipart/x-mixed-replace; boundary=frame'
+        mimetype="multipart/x-mixed-replace; boundary=frame",
     )
 
-@app.route('/video_frame')
+
+@app.route("/video_frame")
 def video_frame():
     with jpeg_lock:
         if latest_jpeg is None:
-            return '', 503
+            return "", 503
+
         frame_bytes = latest_jpeg
 
-    return Response(frame_bytes, mimetype='image/jpeg')
+    return Response(
+        frame_bytes,
+        mimetype="image/jpeg",
+    )
 
-@app.route('/status')
+
+@app.route("/camera/idle", methods=["POST"])
+def camera_idle():
+    global camera_active
+
+    # IDLE påverkar inte kameran.
+    camera_active = True
+
+    return jsonify({
+        "ok": True,
+        "camera_active": True,
+        "camera_kept_running": True,
+    })
+
+
+@app.route("/camera/connect", methods=["POST"])
+def camera_connect():
+    global camera_active
+
+    # Kameran är redan igång.
+    camera_active = True
+
+    return jsonify({
+        "ok": True,
+        "camera_active": True,
+    })
+
+
+@app.route("/status")
 def status():
     return jsonify({
         "locked": is_locked,
         "cx": smooth_cx,
         "cy": smooth_cy,
-        "fps": int(current_fps)
+        "fps": int(current_fps),
+        "camera_active": True,
+        "frame_width": FRAME_W,
+        "frame_height": FRAME_H,
     })
 
-@app.route('/unlock', methods=['POST'])
+
+@app.route("/unlock", methods=["POST"])
 def unlock():
     global force_unlock
+
+    # Samma A-knappsfunktion som tidigare.
     force_unlock = True
+
     return jsonify({"ok": True})
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, threaded=True)
+
+if __name__ == "__main__":
+    try:
+        app.run(
+            host="0.0.0.0",
+            port=8080,
+            threaded=True,
+            use_reloader=False,
+        )
+    finally:
+        try:
+            ser.close()
+        except Exception:
+            pass
+
+        try:
+            picam2.stop()
+        except Exception:
+            pass
+
+        GPIO.cleanup()
