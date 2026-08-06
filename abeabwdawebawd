@@ -66,6 +66,20 @@ Window {
     property double lidarRequestStartedAt: 0
     property int lidarDistanceMm: 0
     property real lidarDistanceM: 0.0
+
+    // Utökad måltelemetri för radarpanelen.
+    property real lidarAngleDeg: 0.0
+    property bool lidarAngleValid: false
+    property real lidarVelocityMps: 0.0
+    property bool lidarVelocityValid: false
+    property real lidarMagnitude: 0.0
+    property bool lidarMagnitudeValid: false
+
+    // Används för att beräkna radialhastighet när servern inte skickar
+    // velocity/velocity_mps direkt.
+    property real lidarPreviousDistanceM: 0.0
+    property double lidarPreviousSampleAt: 0
+
     property real lidarMaxRangeM: 10.0
     property int lidarStatus: 0
     property int lidarHttpStatus: 0
@@ -74,6 +88,114 @@ Window {
 
     // Samma HTTP-baserade distanskälla som tidigare.
     property string lidarSource: "WAITING"
+
+    function lidarNumber(data, names) {
+        for (var i = 0; i < names.length; ++i) {
+            var rawValue = data[names[i]]
+            if (rawValue === undefined || rawValue === null || rawValue === "")
+                continue
+
+            var parsedValue = Number(rawValue)
+            if (isFinite(parsedValue))
+                return parsedValue
+        }
+
+        return NaN
+    }
+
+    function clearLidarTelemetry(clearDistance) {
+        window.lidarAngleDeg = 0.0
+        window.lidarAngleValid = false
+        window.lidarVelocityMps = 0.0
+        window.lidarVelocityValid = false
+        window.lidarMagnitude = 0.0
+        window.lidarMagnitudeValid = false
+        window.lidarPreviousDistanceM = 0.0
+        window.lidarPreviousSampleAt = 0
+
+        if (clearDistance) {
+            window.lidarDistanceMm = 0
+            window.lidarDistanceM = 0.0
+        }
+    }
+
+    function updateLidarTelemetry(data, distanceM, sampleAt) {
+        // Vinkel kan skickas av LiDAR-servern. Om den saknas används
+        // kameramålets horisontella position och omvandlas till ±90 grader.
+        var angleDeg = window.lidarNumber(
+                    data,
+                    ["angle_deg", "angle", "bearing_deg", "bearing", "azimuth_deg", "azimuth"]
+                )
+
+        if (!isFinite(angleDeg)) {
+            var cameraTargetAvailable =
+                    window.targetFrameWidth > 1 &&
+                    (window.targetX > 0 || window.targetY > 0)
+
+            if (cameraTargetAvailable) {
+                angleDeg =
+                        (window.targetX / window.targetFrameWidth - 0.5) * 180.0
+            }
+        }
+
+        if (isFinite(angleDeg)) {
+            window.lidarAngleDeg = Math.max(-90.0, Math.min(90.0, angleDeg))
+            window.lidarAngleValid = true
+        } else {
+            window.lidarAngleDeg = 0.0
+            window.lidarAngleValid = false
+        }
+
+        // Använd serverns hastighet när den finns. Annars beräknas
+        // radialhastigheten från förändringen i distans mellan två mätningar.
+        var velocityMps = window.lidarNumber(
+                    data,
+                    ["velocity_mps", "velocity_m_s", "radial_velocity_mps", "speed_mps", "velocity", "speed"]
+                )
+        var velocityMmps = window.lidarNumber(
+                    data,
+                    ["velocity_mm_s", "velocity_mmps", "speed_mm_s", "speed_mmps"]
+                )
+
+        if (!isFinite(velocityMps) && isFinite(velocityMmps))
+            velocityMps = velocityMmps / 1000.0
+
+        if (!isFinite(velocityMps) && window.lidarPreviousSampleAt > 0) {
+            var elapsedSeconds =
+                    (sampleAt - window.lidarPreviousSampleAt) / 1000.0
+
+            if (elapsedSeconds >= 0.05 && elapsedSeconds <= 2.0) {
+                velocityMps =
+                        (distanceM - window.lidarPreviousDistanceM) /
+                        elapsedSeconds
+            }
+        }
+
+        if (isFinite(velocityMps)) {
+            window.lidarVelocityMps = velocityMps
+            window.lidarVelocityValid = true
+        } else {
+            window.lidarVelocityMps = 0.0
+            window.lidarVelocityValid = false
+        }
+
+        // Magnitude läses från serverns mätstyrka/amplitud när den finns.
+        var magnitudeValue = window.lidarNumber(
+                    data,
+                    ["magnitude", "signal_magnitude", "signal_strength", "strength", "amplitude", "quality"]
+                )
+
+        if (isFinite(magnitudeValue)) {
+            window.lidarMagnitude = magnitudeValue
+            window.lidarMagnitudeValid = true
+        } else {
+            window.lidarMagnitude = 0.0
+            window.lidarMagnitudeValid = false
+        }
+
+        window.lidarPreviousDistanceM = distanceM
+        window.lidarPreviousSampleAt = sampleAt
+    }
 
     property bool targetDistanceValid: lidarConnected && lidarValid
     property real socketValue: 0.0
@@ -102,7 +224,22 @@ Window {
     property int left_trig: 0
     property int smooth_cx: 0
     property int smooth_cy: 0
+
+    // Vald kanister i GAS-läge:
+    // 1 = vänster, 2 = mitten, 3 = höger.
+    // X väljer åt vänster och B väljer åt höger.
     property int selectedMissile: 1
+    property bool bButtonHeld: false
+    property bool xButtonHeld: false
+
+    // Synkronisering av kanisterval med serverns onMessageRecieved.
+    property string canisterPendingDirection: ""
+    property double canisterPendingUntil: 0
+    property string lastCanisterServerEvent: ""
+    property double lastCanisterServerEventAt: 0
+    property int lastServerB: 0
+    property int lastServerX: 0
+
     // Alla missiler startar oladdade i både GAS- och SERVO-läge.
     // De blir laddade först när användaren själv trycker L1.
     property bool mLeft: false
@@ -134,6 +271,11 @@ Window {
     // true = GAS, false = SERVO MOTOR.
     // Y-knappen växlar mellan dessa två lägen.
     property bool gasMode: true
+
+    // När användaren eller servern byter mellan GAS och SERVO
+    // töms samtliga kanistrar omedelbart.
+    onGasModeChanged: window.clearAmmunitionOnModeChange()
+
     property bool firingModeKnown: true
     property bool firingModePending: false
 
@@ -152,6 +294,253 @@ Window {
 
     // Extra debounce som fungerar även om SDL skickar press/release flera gånger.
     property double lastYToggleAt: 0
+
+    function canSelectCanister() {
+        return window.gasMode &&
+               !debugScreen.visible &&
+               !tutorial.visible &&
+               window.status !== "Intro" &&
+               window.status !== "idle"
+    }
+
+    function setSelectedCanister(index) {
+        var value = Math.round(Number(index))
+
+        if (!isFinite(value))
+            return false
+
+        value = Math.max(1, Math.min(3, value))
+        window.selectedMissile = value
+
+        console.log("Selected GAS canister:", value)
+        return true
+    }
+
+    function moveSelectedCanister(direction) {
+        if (direction === "left") {
+            window.selectedMissile =
+                    window.selectedMissile <= 1
+                    ? 3
+                    : window.selectedMissile - 1
+            return true
+        }
+
+        if (direction === "right") {
+            window.selectedMissile =
+                    window.selectedMissile >= 3
+                    ? 1
+                    : window.selectedMissile + 1
+            return true
+        }
+
+        return false
+    }
+
+    function requestCanisterSelection(direction) {
+        if (!window.canSelectCanister())
+            return false
+
+        if (!window.moveSelectedCanister(direction))
+            return false
+
+        // UI:t ändras direkt. Serverns svar via onMessageRecieved
+        // bekräftar valet utan att flytta markeringen en gång till.
+        window.canisterPendingDirection = direction
+        window.canisterPendingUntil = Date.now() + 3000
+
+        console.log(
+            "Local GAS canister selection:",
+            direction,
+            "selected:",
+            window.selectedMissile
+        )
+
+        return true
+    }
+
+    function applyServerCanisterEvent(direction) {
+        var now = Date.now()
+
+        if (direction !== "left" && direction !== "right")
+            return false
+
+        // Bekräfta ett val som redan utförts lokalt.
+        if (window.canisterPendingDirection === direction &&
+            now <= window.canisterPendingUntil) {
+
+            window.canisterPendingDirection = ""
+            window.canisterPendingUntil = 0
+            window.lastCanisterServerEvent = direction
+            window.lastCanisterServerEventAt = now
+
+            console.log(
+                "Server confirmed GAS canister selection:",
+                direction,
+                "selected:",
+                window.selectedMissile
+            )
+            return true
+        }
+
+        // Samma svar kan komma via både client och tcpButtons.
+        if (window.lastCanisterServerEvent === direction &&
+            now - window.lastCanisterServerEventAt < 350) {
+
+            console.log(
+                "Ignoring duplicate canister event:",
+                direction
+            )
+            return true
+        }
+
+        window.lastCanisterServerEvent = direction
+        window.lastCanisterServerEventAt = now
+
+        // Serverstyrda kanisterhändelser påverkar endast GAS-läget.
+        if (!window.gasMode)
+            return true
+
+        return window.moveSelectedCanister(direction)
+    }
+
+    function applyCanisterMessage(rawMessage) {
+        if (rawMessage === undefined || rawMessage === null)
+            return false
+
+        var message = String(rawMessage).trim().toLowerCase()
+
+        if (message.length === 0)
+            return false
+
+        // Explicita svar:
+        // canister:2
+        // selected_canister=3
+        // canister_selected 1
+        var selectedMatch = message.match(
+                    /(?:selected[_ ]?canister|canister[_ ]?selected|canister)["']?\s*[:= ]\s*([1-3])(?:\s*$|\s*[^0-9])/
+                )
+
+        if (selectedMatch !== null) {
+            window.setSelectedCanister(Number(selectedMatch[1]))
+            window.canisterPendingDirection = ""
+            window.canisterPendingUntil = 0
+            return true
+        }
+
+        // Textbaserade serverbekräftelser.
+        var isLeft =
+                message === "left" ||
+                message === "canister_left" ||
+                message === "canister left" ||
+                message === "previous canister" ||
+                message === "canister previous"
+
+        var isRight =
+                message === "right" ||
+                message === "canister_right" ||
+                message === "canister right" ||
+                message === "next canister" ||
+                message === "canister next"
+
+        if (isLeft && !isRight)
+            return window.applyServerCanisterEvent("left")
+
+        if (isRight && !isLeft)
+            return window.applyServerCanisterEvent("right")
+
+        // Servern kan även eka standardpaketet:
+        // a,b,x,y,L1,R1
+        var buttonMatch = message.match(
+                    /^\s*([01])\s*,\s*([01])\s*,\s*([01])\s*,\s*([01])\s*,\s*([01])\s*,\s*([01])\s*$/
+                )
+
+        if (buttonMatch !== null) {
+            var serverB = Number(buttonMatch[2])
+            var serverX = Number(buttonMatch[3])
+
+            if (serverB === 1 && window.lastServerB === 0)
+                window.applyServerCanisterEvent("right")
+
+            if (serverX === 1 && window.lastServerX === 0)
+                window.applyServerCanisterEvent("left")
+
+            window.lastServerB = serverB
+            window.lastServerX = serverX
+            return true
+        }
+
+        return false
+    }
+
+    function handleCanisterData(receiver, rawData) {
+        if (rawData === undefined || rawData === null)
+            return
+
+        var incoming = String(rawData)
+
+        // Kompletta meddelanden utan radslut hanteras direkt.
+        if (window.applyCanisterMessage(incoming))
+            return
+
+        receiver.canisterBuffer += incoming
+
+        var normalized = receiver.canisterBuffer.replace(/\r/g, "\n")
+        var messages = normalized.split("\n")
+        receiver.canisterBuffer = messages.pop()
+
+        for (var i = 0; i < messages.length; ++i)
+            window.applyCanisterMessage(messages[i])
+
+        if (window.applyCanisterMessage(receiver.canisterBuffer)) {
+            receiver.canisterBuffer = ""
+            return
+        }
+
+        // Rensa data som tydligt inte är ett kanistermeddelande,
+        // så att exempelvis GAS/SERVO-svar inte fastnar i bufferten.
+        var candidate = receiver.canisterBuffer
+                .trim()
+                .toLowerCase()
+
+        var mayBeCanisterMessage =
+                candidate.length === 0 ||
+                candidate.indexOf("can") === 0 ||
+                candidate.indexOf("sel") === 0 ||
+                candidate.indexOf("prev") === 0 ||
+                candidate.indexOf("next") === 0 ||
+                candidate.indexOf("left") === 0 ||
+                candidate.indexOf("right") === 0 ||
+                /^[01,\s]+$/.test(candidate)
+
+        if (!mayBeCanisterMessage ||
+            receiver.canisterBuffer.length > 256) {
+            receiver.canisterBuffer = ""
+        }
+    }
+
+    function clearAmmunitionOnModeChange() {
+        // Varje byte mellan GAS och SERVO ska börja med tom ammunition.
+        window.mLeft = false
+        window.mMid = false
+        window.mRight = false
+
+        // Nollställ väntande och tidigare serverhändelser så att ett
+        // försenat svar inte kan ladda eller skjuta efter lägesbytet.
+        window.ammunitionActivatedByUser = false
+        window.ammoPendingAction = ""
+        window.ammoPendingUntil = 0
+        window.lastAmmoServerEvent = ""
+        window.lastAmmoServerEventAt = 0
+        window.lastServerShoulderL = 0
+        window.lastServerShoulderR = 0
+        window.l1ButtonHeld = false
+        window.r1ButtonHeld = false
+
+        console.log(
+            "Firing mode changed - all ammunition cleared:",
+            window.gasMode ? "GAS" : "SERVO"
+        )
+    }
 
     function ammunitionCount() {
         return (window.mLeft ? 1 : 0) +
@@ -192,7 +581,8 @@ Window {
     }
 
     function consumeNextMissile() {
-        // Skjutordning: vänster -> mitten -> höger.
+        // SERVO-läge behåller den gamla skjutordningen:
+        // vänster -> mitten -> höger.
         if (window.mLeft) {
             window.mLeft = false
             return true
@@ -212,9 +602,52 @@ Window {
         return false
     }
 
+    function consumeSelectedCanister() {
+        // I GAS-läge skjuts exakt den kanister som har valts med X/B.
+        if (window.selectedMissile === 1) {
+            if (!window.mLeft) {
+                console.log("R1: selected GAS canister 1 is not loaded")
+                return false
+            }
+
+            window.mLeft = false
+            return true
+        }
+
+        if (window.selectedMissile === 2) {
+            if (!window.mMid) {
+                console.log("R1: selected GAS canister 2 is not loaded")
+                return false
+            }
+
+            window.mMid = false
+            return true
+        }
+
+        if (window.selectedMissile === 3) {
+            if (!window.mRight) {
+                console.log("R1: selected GAS canister 3 is not loaded")
+                return false
+            }
+
+            window.mRight = false
+            return true
+        }
+
+        console.log("R1: invalid selected GAS canister")
+        return false
+    }
+
+    function consumeMissileForCurrentMode() {
+        if (window.gasMode)
+            return window.consumeSelectedCanister()
+
+        return window.consumeNextMissile()
+    }
+
     function reloadNextMissile() {
-        // Laddordning: höger -> mitten -> vänster.
-        // Exakt en missil laddas per L1-tryck.
+        // SERVO-läge behåller den gamla laddordningen:
+        // höger -> mitten -> vänster.
         if (!window.mRight) {
             window.mRight = true
             return true
@@ -234,13 +667,56 @@ Window {
         return false
     }
 
+    function reloadSelectedCanister() {
+        // I GAS-läge laddas exakt den kanister som har valts med X/B.
+        if (window.selectedMissile === 1) {
+            if (window.mLeft) {
+                console.log("L1: selected GAS canister 1 is already loaded")
+                return false
+            }
+
+            window.mLeft = true
+            return true
+        }
+
+        if (window.selectedMissile === 2) {
+            if (window.mMid) {
+                console.log("L1: selected GAS canister 2 is already loaded")
+                return false
+            }
+
+            window.mMid = true
+            return true
+        }
+
+        if (window.selectedMissile === 3) {
+            if (window.mRight) {
+                console.log("L1: selected GAS canister 3 is already loaded")
+                return false
+            }
+
+            window.mRight = true
+            return true
+        }
+
+        console.log("L1: invalid selected GAS canister")
+        return false
+    }
+
+    function reloadMissileForCurrentMode() {
+        if (window.gasMode)
+            return window.reloadSelectedCanister()
+
+        return window.reloadNextMissile()
+    }
+
     function requestAmmunitionAction(action) {
         var changed = false
 
         if (action === "fire")
-            changed = window.consumeNextMissile()
+            changed = window.consumeMissileForCurrentMode()
         else if (action === "reload")
-            changed = window.reloadNextMissile()
+            changed = window.reloadMissileForCurrentMode()
 
         if (!changed)
             return false
@@ -292,7 +768,7 @@ Window {
         window.lastAmmoServerEventAt = now
 
         if (action === "fire")
-            return window.consumeNextMissile()
+            return window.consumeMissileForCurrentMode()
 
         if (action === "reload") {
             if (!window.ammunitionActivatedByUser) {
@@ -302,7 +778,7 @@ Window {
                 return true
             }
 
-            return window.reloadNextMissile()
+            return window.reloadMissileForCurrentMode()
         }
 
         return false
@@ -562,10 +1038,8 @@ Window {
             return
         }
 
-        // Stoppa bildhämtningen direkt när idle börjar.
-        if (idleState)
-            window.cameraServerActive = false
-
+        // Kameraservern och kamerabilden ska fortsätta vara aktiva i IDLE.
+        // Endpointen anropas fortfarande för kompatibilitet med servern.
         window.cameraCommandPending = true
 
         var xhr = new XMLHttpRequest()
@@ -578,18 +1052,11 @@ Window {
             window.cameraCommandPending = false
 
             if (xhr.status === 200) {
-                window.cameraServerActive = !idleState
-
-                if (!idleState) {
-                    turretItem.cameraReady = false
-                    feedTimer.waitingForLoad = false
-                }
+                window.cameraServerActive = true
+                feedTimer.waitingForLoad = false
             } else {
                 window.cameraServerActive = false
-
-                // Försök igen om kameran skulle misslyckas att starta.
-                if (!idleState && !window.isidle)
-                    cameraConnectRetry.restart()
+                cameraConnectRetry.restart()
             }
         }
 
@@ -694,8 +1161,7 @@ Window {
         if (!systemConnected || !window.lockedOn) {
             window.lidarConnected = false
             window.lidarValid = false
-            window.lidarDistanceMm = 0
-            window.lidarDistanceM = 0.0
+            window.clearLidarTelemetry(true)
             window.lidarStatus = 0
             window.lidarSource = "WAITING"
             window.lidarMessage = systemConnected
@@ -725,6 +1191,7 @@ Window {
             if (xhr.status !== 200) {
                 window.lidarConnected = false
                 window.lidarValid = false
+                window.clearLidarTelemetry(true)
                 window.lidarSource = "WAITING"
                 window.lidarMessage = "NO CONNECTION"
                 return
@@ -758,16 +1225,21 @@ Window {
                     window.lidarDistanceMm = Math.round(distanceMm)
                     window.lidarDistanceM =
                             window.lidarDistanceMm / 1000.0
+                    window.updateLidarTelemetry(
+                                data,
+                                window.lidarDistanceM,
+                                Date.now()
+                            )
                     window.lidarSource = "HTTP SENSOR"
-                    window.lidarMessage = "DISTANCE ONLINE"
+                    window.lidarMessage = "TRACKING ONLINE"
                 } else {
-                    window.lidarDistanceMm = 0
-                    window.lidarDistanceM = 0.0
+                    window.clearLidarTelemetry(true)
                     window.lidarMessage = "INVALID DISTANCE"
                 }
             } catch (error) {
                 window.lidarConnected = false
                 window.lidarValid = false
+                window.clearLidarTelemetry(true)
                 window.lidarSource = "WAITING"
                 window.lidarMessage = "JSON ERROR"
             }
@@ -813,6 +1285,7 @@ Window {
             window.lidarRequestPending = false
             window.lidarConnected = false
             window.lidarValid = false
+            window.clearLidarTelemetry(true)
             window.lidarSource = "WAITING"
             window.lidarMessage = "LIDAR TIMEOUT"
 
@@ -876,6 +1349,7 @@ Window {
         id: tcpButtons
         property string modeBuffer: ""
         property string ammoBuffer: ""
+        property string canisterBuffer: ""
 
         onConnected: {
             console.log("Buttons connected")
@@ -883,6 +1357,7 @@ Window {
 
         onMessageRecieved: {
             console.log("Button-server data:", String(msg))
+            window.handleCanisterData(tcpButtons, msg)
             window.handleFiringModeData(tcpButtons, msg)
             window.handleAmmunitionData(tcpButtons, msg)
         }
@@ -1134,6 +1609,7 @@ Window {
             id: client
             property string modeBuffer: ""
             property string ammoBuffer: ""
+            property string canisterBuffer: ""
 
             onConnected: {
                 window.everOperative = true
@@ -1152,6 +1628,7 @@ Window {
 
             onMessageRecieved: {
                 console.log("Main-server data:", String(msg))
+                window.handleCanisterData(client, msg)
                 window.handleFiringModeData(client, msg)
                 window.handleAmmunitionData(client, msg)
             }
@@ -1504,9 +1981,9 @@ Window {
 
                     Repeater {
                         model: [
-                            { loaded: window.mLeft },
-                            { loaded: window.mMid },
-                            { loaded: window.mRight }
+                            { slot: 1, loaded: window.mLeft },
+                            { slot: 2, loaded: window.mMid },
+                            { slot: 3, loaded: window.mRight }
                         ]
 
                         delegate: Item {
@@ -1517,20 +1994,32 @@ Window {
                                 anchors.fill: parent
                                 radius: 4
                                 color: modelData.loaded ? "#201315" : "#101A22"
-                                border.color: modelData.loaded
-                                              ? window.uiRed
-                                              : window.uiLine
-                                border.width: 1
+                                border.color:
+                                        window.gasMode &&
+                                        window.selectedMissile === modelData.slot
+                                        ? window.uiYellow
+                                        : (modelData.loaded
+                                           ? window.uiRed
+                                           : window.uiLine)
+                                border.width:
+                                        window.gasMode &&
+                                        window.selectedMissile === modelData.slot
+                                        ? 3
+                                        : 1
                             }
 
                             Rectangle {
                                 anchors.top: parent.top
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 width: 24
-                                height: 2
-                                color: modelData.loaded
-                                       ? window.uiRed
-                                       : window.uiSilver
+                                height: 3
+                                color:
+                                        window.gasMode &&
+                                        window.selectedMissile === modelData.slot
+                                        ? window.uiYellow
+                                        : (modelData.loaded
+                                           ? window.uiRed
+                                           : window.uiSilver)
                             }
 
                             Missile {
@@ -1540,7 +2029,9 @@ Window {
                                 loaded: modelData.loaded
                                 loadedColor: window.uiRed
                                 spentColor: "#FFFFFF"
-                                selected: false
+                                selected:
+                                        window.gasMode &&
+                                        window.selectedMissile === modelData.slot
 
                                 // Skalar upp missilen när panelen får mer höjd,
                                 // men håller den inom varje ammunitionsplats.
@@ -1564,6 +2055,21 @@ Window {
                                        ? window.uiRed
                                        : window.uiSilver
                                 opacity: modelData.loaded ? 1.0 : 0.35
+                            }
+
+                            Text {
+                                anchors.bottom: parent.bottom
+                                anchors.bottomMargin: 13
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: String(modelData.slot)
+                                color:
+                                        window.gasMode &&
+                                        window.selectedMissile === modelData.slot
+                                        ? window.uiYellow
+                                        : window.uiMuted
+                                font.pixelSize: 10
+                                font.bold: true
+                                font.family: "Eurostile"
                             }
 
                             Rectangle {
@@ -1820,13 +2326,20 @@ Window {
                         }
 
                         if (window.trackingDataVisible) {
-                            // Den gamla distansservern skickar ingen vinkel.
-                            // Målet visas därför rakt fram på 0-graderslinjen.
-                            var ox = cx
-                            var oy = cy - Math.max(
+                            var targetAngleDeg =
+                                    window.lidarAngleValid
+                                    ? window.lidarAngleDeg
+                                    : 0.0
+                            var targetAngleRad =
+                                    targetAngleDeg * Math.PI / 180
+                            var targetRadius = Math.max(
                                         4,
                                         maxRadius * normalizedDistance
                                     )
+                            var ox = cx +
+                                    Math.sin(targetAngleRad) * targetRadius
+                            var oy = cy -
+                                    Math.cos(targetAngleRad) * targetRadius
 
                             ctx.strokeStyle = stateColor
                             ctx.lineWidth = 2
@@ -1860,6 +2373,14 @@ Window {
                             lidarScopeCanvas.requestPaint()
                         }
 
+                        function onLidarAngleDegChanged() {
+                            lidarScopeCanvas.requestPaint()
+                        }
+
+                        function onLidarAngleValidChanged() {
+                            lidarScopeCanvas.requestPaint()
+                        }
+
                         function onLockedOnChanged() {
                             lidarScopeCanvas.requestPaint()
                         }
@@ -1871,54 +2392,189 @@ Window {
                 }
             }
 
-            Rectangle {
+            Grid {
+                id: lidarMetrics
                 width: parent.width
-                height: 96
-                radius: 6
-                color: window.uiPanel2
-                border.color: window.trackingDataVisible
-                              ? window.uiRed
-                              : window.uiLine
-                border.width: 1
+                height: 136
+                columns: 2
+                columnSpacing: 10
+                rowSpacing: 10
 
-                Row {
-                    anchors.fill: parent
-                    anchors.leftMargin: 18
-                    anchors.rightMargin: 18
+                Rectangle {
+                    width: (lidarMetrics.width - lidarMetrics.columnSpacing) / 2
+                    height: 63
+                    radius: 6
+                    color: window.uiPanel2
+                    border.color: window.uiLine
+                    border.width: 1
 
                     Column {
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 5
+                        anchors.fill: parent
+                        anchors.margins: 9
+                        spacing: 8
 
                         Text {
                             text: "DISTANCE"
                             color: window.uiMuted
-                            font.pixelSize: 10
+                            font.pixelSize: 9
                             font.bold: true
                             font.family: "Eurostile"
-                            font.letterSpacing: 2
+                            font.letterSpacing: 1.4
+                        }
+
+                        Row {
+                            spacing: 4
+
+                            Text {
+                                text: window.trackingDataVisible
+                                      ? window.lidarDistanceM.toFixed(2)
+                                      : "---"
+                                color: window.uiText
+                                font.pixelSize: 18
+                                font.bold: true
+                                font.family: "Eurostile"
+                            }
+
+                            Text {
+                                anchors.baseline: parent.children[0].baseline
+                                text: "m"
+                                color: window.uiYellow
+                                font.pixelSize: 11
+                                font.bold: true
+                                font.family: "Eurostile"
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: (lidarMetrics.width - lidarMetrics.columnSpacing) / 2
+                    height: 63
+                    radius: 6
+                    color: window.uiPanel2
+                    border.color: window.uiLine
+                    border.width: 1
+
+                    Column {
+                        anchors.fill: parent
+                        anchors.margins: 9
+                        spacing: 8
+
+                        Text {
+                            text: "ANGLE"
+                            color: window.uiMuted
+                            font.pixelSize: 9
+                            font.bold: true
+                            font.family: "Eurostile"
+                            font.letterSpacing: 1.4
+                        }
+
+                        Row {
+                            spacing: 4
+
+                            Text {
+                                text: window.trackingDataVisible &&
+                                      window.lidarAngleValid
+                                      ? window.lidarAngleDeg.toFixed(1)
+                                      : "---"
+                                color: window.uiText
+                                font.pixelSize: 18
+                                font.bold: true
+                                font.family: "Eurostile"
+                            }
+
+                            Text {
+                                anchors.baseline: parent.children[0].baseline
+                                text: "deg"
+                                color: window.uiYellow
+                                font.pixelSize: 11
+                                font.bold: true
+                                font.family: "Eurostile"
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: (lidarMetrics.width - lidarMetrics.columnSpacing) / 2
+                    height: 63
+                    radius: 6
+                    color: window.uiPanel2
+                    border.color: window.uiLine
+                    border.width: 1
+
+                    Column {
+                        anchors.fill: parent
+                        anchors.margins: 9
+                        spacing: 8
+
+                        Text {
+                            text: "VELOCITY"
+                            color: window.uiMuted
+                            font.pixelSize: 9
+                            font.bold: true
+                            font.family: "Eurostile"
+                            font.letterSpacing: 1.4
+                        }
+
+                        Row {
+                            spacing: 4
+
+                            Text {
+                                text: window.trackingDataVisible &&
+                                      window.lidarVelocityValid
+                                      ? window.lidarVelocityMps.toFixed(2)
+                                      : "---"
+                                color: window.uiText
+                                font.pixelSize: 18
+                                font.bold: true
+                                font.family: "Eurostile"
+                            }
+
+                            Text {
+                                anchors.baseline: parent.children[0].baseline
+                                text: "m/s"
+                                color: window.uiYellow
+                                font.pixelSize: 11
+                                font.bold: true
+                                font.family: "Eurostile"
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: (lidarMetrics.width - lidarMetrics.columnSpacing) / 2
+                    height: 63
+                    radius: 6
+                    color: window.uiPanel2
+                    border.color: window.uiLine
+                    border.width: 1
+
+                    Column {
+                        anchors.fill: parent
+                        anchors.margins: 9
+                        spacing: 8
+
+                        Text {
+                            text: "MAGNITUDE"
+                            color: window.uiMuted
+                            font.pixelSize: 9
+                            font.bold: true
+                            font.family: "Eurostile"
+                            font.letterSpacing: 1.4
                         }
 
                         Text {
-                            text: window.trackingDataVisible
-                                  ? window.lidarDistanceM.toFixed(2)
+                            text: window.trackingDataVisible &&
+                                  window.lidarMagnitudeValid
+                                  ? window.lidarMagnitude.toFixed(2)
                                   : "---"
                             color: window.uiText
-                            font.pixelSize: 34
+                            font.pixelSize: 18
                             font.bold: true
                             font.family: "Eurostile"
                         }
-                    }
-
-                    Text {
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        anchors.verticalCenterOffset: 15
-                        text: "m"
-                        color: window.uiYellow
-                        font.pixelSize: 14
-                        font.bold: true
-                        font.family: "Eurostile"
                     }
                 }
             }
@@ -2051,7 +2707,7 @@ Window {
         Timer {
             id: feedTimer
             interval: 33
-            running: !window.isidle && window.cameraServerActive
+            running: window.networkEnabled && window.cameraServerActive
             repeat: true
             property bool waitingForLoad: false
 
@@ -2076,7 +2732,7 @@ Window {
             anchors.margins: 2
             radius: 6
             color: "#08131C"
-            visible: window.isidle || !turretItem.cameraReady
+            visible: !window.networkEnabled || !turretItem.cameraReady
             z: 10
 
             Canvas {
@@ -2119,9 +2775,7 @@ Window {
                 Text {
                     text: !window.networkEnabled
                           ? "CAMERA OFFLINE"
-                          : (window.isidle
-                             ? "CAMERA STANDBY"
-                             : "INITIALIZING CAMERA")
+                          : "INITIALIZING CAMERA"
                     color: window.uiText
                     font.pixelSize: 20
                     font.bold: true
@@ -2133,9 +2787,7 @@ Window {
                 Text {
                     text: !window.networkEnabled
                           ? "No network connection"
-                          : (window.isidle
-                             ? "Exit idle state to resume feed"
-                             : "Waiting for video stream")
+                          : "Waiting for video stream"
                     color: window.uiMuted
                     font.pixelSize: 12
                     font.family: "Eurostile"
@@ -2148,33 +2800,13 @@ Window {
             target: window
 
             function onIsidleChanged() {
+                // Behåll kamerabilden och de laddade bildkällorna i IDLE.
                 feedTimer.waitingForLoad = false
-                turretItem.cameraReady = false
-                feed1.source = ""
-                feed2.source = ""
 
-                if (window.isidle) {
-                    window.lockedOn = false
-                    window.targetX = 0
-                    window.targetY = 0
-
-                    var request = window.lidarActiveRequest
-                    window.lidarActiveRequest = null
-                    window.lidarRequestPending = false
-                    window.lidarConnected = false
-                    window.lidarValid = false
-                    window.lidarDistanceMm = 0
-                    window.lidarDistanceM = 0.0
-                            window.lidarSource = "WAITING"
-                    window.lidarStatus = 0
-                    window.lidarMessage = "WAITING FOR CONNECTION"
-
-                    if (request !== null) {
-                        try {
-                            request.abort()
-                        } catch (error) {
-                        }
-                    }
+                if (window.networkEnabled &&
+                    !window.cameraServerActive &&
+                    !window.cameraCommandPending) {
+                    window.setCameraIdle(window.isidle)
                 }
             }
         }
@@ -2271,6 +2903,17 @@ Window {
         id: sdl
         property bool locked: false
         onButtonPressed: {
+            // Y får bara växla GAS/SERVO på huvudskärmen.
+            // I DEBUG och GUIDE ignoreras Y helt.
+            if (button === 3 &&
+                (debugScreen.visible || tutorial.visible)) {
+                window.y = 0
+                window.yButtonHeld = false
+                yReleasePulseTimer.stop()
+                console.log("Y ignored while DEBUG or GUIDE is open")
+                return
+            }
+
             reset_idle()
             if (status == "Intro") {
                 if (!window.networkEnabled) {
@@ -2310,9 +2953,32 @@ Window {
 
                     window.sendUnlock()
                     break
-                case 1: b = 1; break
-                case 2: x = 1; break
+                case 1:
+                    b = 1
+
+                    // B väljer nästa kanister åt höger i GAS-läge.
+                    if (!window.bButtonHeld) {
+                        window.bButtonHeld = true
+                        window.requestCanisterSelection("right")
+                    }
+                    break
+
+                case 2:
+                    x = 1
+
+                    // X väljer föregående kanister åt vänster i GAS-läge.
+                    if (!window.xButtonHeld) {
+                        window.xButtonHeld = true
+                        window.requestCanisterSelection("left")
+                    }
+                    break
                 case 3:
+                    if (debugScreen.visible || tutorial.visible) {
+                        y = 0
+                        window.yButtonHeld = false
+                        break
+                    }
+
                     y = 1
 
                     var now = Date.now()
@@ -2362,11 +3028,27 @@ Window {
             }
         }
         onButtonReleased: {
+            // Inget Y-releasepaket skickas från DEBUG eller GUIDE.
+            if (button === 3 &&
+                (debugScreen.visible || tutorial.visible)) {
+                window.y = 0
+                window.yButtonHeld = false
+                yReleasePulseTimer.stop()
+                return
+            }
+
             if (status !== "Intro" && status != "idle") {
                 switch(button) {
                 case 0: a = 0; break
-                case 1: b = 0; break
-                case 2: x = 0; break
+                case 1:
+                    b = 0
+                    window.bButtonHeld = false
+                    break
+
+                case 2:
+                    x = 0
+                    window.xButtonHeld = false
+                    break
                 case 3:
                     y = 0
                     window.yButtonHeld = false
@@ -2543,6 +3225,7 @@ Window {
 
             Button {
                 id: debugButton
+                focusPolicy: Qt.NoFocus
                 text: "DEBUG"
                 width: 88
                 height: 42
@@ -2564,11 +3247,18 @@ Window {
                     font: debugButton.font
                 }
 
-                onClicked: debugScreen.visible = !debugScreen.visible
+                onClicked: {
+                    tutorial.visible = false
+                    debugScreen.visible = !debugScreen.visible
+
+                    if (debugScreen.visible)
+                        debugScreen.forceActiveFocus()
+                }
             }
 
             Button {
                 id: tutorialButton
+                focusPolicy: Qt.NoFocus
                 text: "GUIDE"
                 width: 88
                 height: 42
@@ -2590,7 +3280,13 @@ Window {
                     font: tutorialButton.font
                 }
 
-                onClicked: tutorial.visible = !tutorial.visible
+                onClicked: {
+                    debugScreen.visible = false
+                    tutorial.visible = !tutorial.visible
+
+                    if (tutorial.visible)
+                        tutorial.forceActiveFocus()
+                }
             }
 
             Button {
@@ -2642,6 +3338,20 @@ Window {
         visible: false
         color: window.uiBg
         z: 21
+        focus: visible
+
+        onVisibleChanged: {
+            if (visible)
+                forceActiveFocus()
+        }
+
+        Keys.onPressed: function(event) {
+            event.accepted = true
+        }
+
+        Keys.onReleased: function(event) {
+            event.accepted = true
+        }
 
         Canvas {
             anchors.fill: parent
@@ -2650,8 +3360,20 @@ Window {
                 var ctx = getContext("2d")
                 ctx.strokeStyle = "#1A2333"
                 ctx.lineWidth = 1
-                for (var x = 0; x < width; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke() }
-                for (var y = 0; y < height; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke() }
+
+                for (var x = 0; x < width; x += 60) {
+                    ctx.beginPath()
+                    ctx.moveTo(x, 0)
+                    ctx.lineTo(x, height)
+                    ctx.stroke()
+                }
+
+                for (var y = 0; y < height; y += 60) {
+                    ctx.beginPath()
+                    ctx.moveTo(0, y)
+                    ctx.lineTo(width, y)
+                    ctx.stroke()
+                }
             }
         }
 
@@ -2659,110 +3381,205 @@ Window {
             id: debugTitle
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: parent.top
-            anchors.topMargin: 36
-            text: "DEBUGS"
-            font.pixelSize: 40
+            anchors.topMargin: 28
+            text: "DEBUG"
+            font.pixelSize: 34
             font.bold: true
             font.family: "Eurostile"
-            font.letterSpacing: 6
-            color: "#AFC7FF"
-        }
-Text{
-            text: socketValue
-            color:"white"
-        }
-        Text{
-            text:socketValue2
-            color:"white"
-            x:200
-        }
-        Text{
-            text:socketValue3
-            color:"white"
-            x:400
-        }
-        Text{
-            text:socketValue4
-            color:"white"
-            x:600
-        }
-        Text{
-            text:socketValue5
-            color:"white"
-            x:800
-        }
-        Text{
-            text: socketValue6
-            color:"white"
-            x:1000
+            font.letterSpacing: 5
+            color: window.uiText
         }
 
         Grid {
             anchors.top: debugTitle.bottom
-            anchors.topMargin: 28
+            anchors.topMargin: 18
             anchors.horizontalCenter: parent.horizontalCenter
             columns: 3
             spacing: 20
 
             Repeater {
                 model: [
-                    { label: "DEBUG 1", color: "#AFC7FF" },
-                    { label: "DEBUG 2", color: "#FF5555" },
-                    { label: "DEBUG 3", color: "#00FF88" },
-                    { label: "DEBUG 4", color: "#FFCC00" },
-                    { label: "DEBUG 5", color: "#FF9E3D" },
-                    { label: "DEBUG 6", color: "#B388FF" }
+                    {
+                        channel: 1,
+                        measurement: "SPÄNNING",
+                        fullUnit: "VOLT",
+                        unit: "V",
+                        rail: "3,3 V",
+                        color: "#AFC7FF"
+                    },
+                    {
+                        channel: 2,
+                        measurement: "SPÄNNING",
+                        fullUnit: "VOLT",
+                        unit: "V",
+                        rail: "5 V",
+                        color: "#FF5555"
+                    },
+                    {
+                        channel: 3,
+                        measurement: "SPÄNNING",
+                        fullUnit: "VOLT",
+                        unit: "V",
+                        rail: "14,8 V",
+                        color: "#00FF88"
+                    },
+                    {
+                        channel: 4,
+                        measurement: "STRÖM",
+                        fullUnit: "AMPERE",
+                        unit: "A",
+                        rail: "3,3 V",
+                        color: "#FFCC00"
+                    },
+                    {
+                        channel: 5,
+                        measurement: "STRÖM",
+                        fullUnit: "AMPERE",
+                        unit: "A",
+                        rail: "5 V",
+                        color: "#FF9E3D"
+                    },
+                    {
+                        channel: 6,
+                        measurement: "STRÖM",
+                        fullUnit: "AMPERE",
+                        unit: "A",
+                        rail: "14,8 V",
+                        color: "#B388FF"
+                    }
                 ]
+
                 delegate: Rectangle {
+                    id: debugCard
                     width: 400
                     height: 270
-                    radius: 6
-                    color: "#141B2C"
+                    radius: 7
+                    color: "#111B27"
                     border.color: modelData.color
                     border.width: 2
+
+                    property real channelValue: {
+                        switch (index) {
+                        case 0:
+                            return window.socketValue
+                        case 1:
+                            return window.socketValue2
+                        case 2:
+                            return window.socketValue3
+                        case 3:
+                            return window.socketValue4
+                        case 4:
+                            return window.socketValue5
+                        case 5:
+                            return window.socketValue6
+                        default:
+                            return 0
+                        }
+                    }
+
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        height: 4
+                        radius: 2
+                        color: modelData.color
+                    }
+
                     Column {
-                        anchors.centerIn: parent
-                        spacing: 10
-                        Text {
-                            text: modelData.label
-                            font.pixelSize: 16
-                            font.bold: true
-                            font.family: "Eurostile"
-                            font.letterSpacing: 2
-                            color: modelData.color
-                            anchors.horizontalCenter: parent.horizontalCenter
-                        }
-                        Graph {
-                            width: 360
-                            height: 210
-                            lineColor: modelData.color
-                            dataValue: {
-                                switch(index)
-                                {
-                                case 0:
-                                    socketValue
-                                    break;
-                                case 1:
-                                    socketValue2
-                                    break;
-                                case 2:
-                                    socketValue3
-                                    break;
-                                case 3:
-                                    socketValue4
-                                    break;
-                                case 4:
-                                    socketValue5
-                                    break;
-                                case 5:
-                                    socketValue6
-                                    break;
+                        anchors.fill: parent
+                        anchors.leftMargin: 18
+                        anchors.rightMargin: 18
+                        anchors.topMargin: 13
+                        anchors.bottomMargin: 12
+                        spacing: 6
+
+                        Item {
+                            width: parent.width
+                            height: 25
+
+                            Text {
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "DEBUG " + modelData.channel +
+                                      "  ·  " + modelData.measurement
+                                color: modelData.color
+                                font.pixelSize: 16
+                                font.bold: true
+                                font.family: "Eurostile"
+                                font.letterSpacing: 1.2
+                            }
+
+                            Rectangle {
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 78
+                                height: 24
+                                radius: 4
+                                color: "#0A141D"
+                                border.color: modelData.color
+                                border.width: 1
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData.rail
+                                    color: window.uiText
+                                    font.pixelSize: 12
+                                    font.bold: true
+                                    font.family: "Eurostile"
                                 }
-
-                               // index % 2 === 0 ? window.socketValue : window.
-
-
+                            }
                         }
+
+                        Item {
+                            width: parent.width
+                            height: 38
+
+                            Text {
+                                id: liveDebugValue
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: isFinite(debugCard.channelValue)
+                                      ? Number(debugCard.channelValue)
+                                            .toFixed(2)
+                                            .replace(".", ",")
+                                      : "--"
+                                color: window.uiText
+                                font.pixelSize: 28
+                                font.bold: true
+                                font.family: "Eurostile"
+                            }
+
+                            Text {
+                                anchors.left: liveDebugValue.right
+                                anchors.leftMargin: 10
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.verticalCenterOffset: 4
+                                text: modelData.unit
+                                color: modelData.color
+                                font.pixelSize: 17
+                                font.bold: true
+                                font.family: "Eurostile"
+                            }
+
+                            Text {
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.verticalCenterOffset: 4
+                                text: modelData.fullUnit
+                                color: window.uiMuted
+                                font.pixelSize: 11
+                                font.bold: true
+                                font.family: "Eurostile"
+                                font.letterSpacing: 2
+                            }
+                        }
+
+                        Graph {
+                            width: parent.width
+                            height: 164
+                            lineColor: modelData.color
+                            dataValue: debugCard.channelValue
                         }
                     }
                 }
@@ -2771,6 +3588,7 @@ Text{
 
         Button {
             id: debugQuit
+            focusPolicy: Qt.NoFocus
             text: "Quit"
             width: 120
             height: 52
@@ -2780,23 +3598,27 @@ Text{
             font.pixelSize: 18
             font.bold: true
             font.family: "Eurostile"
+
             background: Rectangle {
                 radius: 4
                 color: "#8A1F1F"
                 border.color: "#C44A4A"
                 border.width: 2
             }
+
             contentItem: Text {
                 text: debugQuit.text
                 anchors.centerIn: parent
                 color: "white"
                 font: debugQuit.font
             }
+
             onClicked: window.close()
         }
 
         Button {
             id: debugBack
+            focusPolicy: Qt.NoFocus
             text: "Tillbaka"
             width: 120
             height: 52
@@ -2806,18 +3628,21 @@ Text{
             font.pixelSize: 18
             font.bold: true
             font.family: "Eurostile"
+
             background: Rectangle {
                 radius: 4
                 color: "#1A2333"
                 border.color: "#3A4A66"
                 border.width: 2
             }
+
             contentItem: Text {
                 text: debugBack.text
                 anchors.centerIn: parent
                 color: "#AFC7FF"
                 font: debugBack.font
             }
+
             onClicked: debugScreen.visible = false
         }
     }
@@ -2829,6 +3654,20 @@ Text{
         visible: false
         color: window.uiBg
         z: 20
+        focus: visible
+
+        onVisibleChanged: {
+            if (visible)
+                forceActiveFocus()
+        }
+
+        Keys.onPressed: function(event) {
+            event.accepted = true
+        }
+
+        Keys.onReleased: function(event) {
+            event.accepted = true
+        }
 
         Canvas {
             anchors.fill: parent
@@ -2856,16 +3695,19 @@ Text{
 
         Column {
             anchors.centerIn: parent
-            spacing: 24
-            Text { text: "Left Joystick  =  Movement/Steering";        font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
-            Text { text: "Right joystick  =  Turret Control/Movement"; font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
-            Text { text: "R1  =  Shoot";                               font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
-            Text { text: "L1   =  Realod";                             font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
-            Text { text: "A   =  Unlock target";                       font.pixelSize: 30; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
+            spacing: 18
+            Text { text: "Left Joystick  =  Movement/Steering";        font.pixelSize: 27; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
+            Text { text: "Right joystick  =  Turret Control/Movement"; font.pixelSize: 27; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
+            Text { text: "R1  =  Shoot";                               font.pixelSize: 27; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
+            Text { text: "L1  =  Reload";                              font.pixelSize: 27; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
+            Text { text: "A  =  Unlock target";                        font.pixelSize: 27; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
+            Text { text: "X  =  Move left (GAS)";                     font.pixelSize: 27; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
+            Text { text: "B  =  Move right (GAS)";                    font.pixelSize: 27; font.bold: true; font.family: "Eurostile"; color: "#D6E1FF" }
         }
 
         Button {
             id: tutorialQuit
+            focusPolicy: Qt.NoFocus
             text: "Quit"
             width: 120
             height: 52
@@ -2892,6 +3734,7 @@ Text{
 
         Button {
             id: backBtn
+            focusPolicy: Qt.NoFocus
             text: "Tillbaka"
             width: 120
             height: 52
